@@ -80,3 +80,7 @@ external/raylib-src/
 external/raylib-build/
 external/raylib-subbuild/
 _deps/
+
+# Development and specification files
+.kiro/
+.env
