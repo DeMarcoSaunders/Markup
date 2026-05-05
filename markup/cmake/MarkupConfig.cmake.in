@@ -1,0 +1,4 @@
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/MarkupTargets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/MarkupImportedRaylib.cmake")

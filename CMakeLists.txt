@@ -1,218 +1,165 @@
-cmake_minimum_required(VERSION 3.15)
-project(MarkUp-UI VERSION 1.0.0 LANGUAGES C)
+cmake_minimum_required(VERSION 3.16)
+project(Markup VERSION 0.2.0 LANGUAGES C)
 
-# Set C standard
-set(CMAKE_C_STANDARD 99)
+# CMake 4+ no longer honors ancient minimums inside dependencies (e.g. FetchContent raylib 5.0
+# declares 3.0). This floor restores compatibility until we pin a newer raylib tag.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
+    set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE STRING
+        "CMake 4: allow fetched deps that still declare cmake_minimum_required below 3.5")
+endif()
+
+set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Options
-option(BUILD_EXAMPLES "Build example applications" ON)
-option(BUILD_TESTS "Build test applications" OFF)
-option(ENABLE_DEBUG "Enable debug mode" OFF)
+option(MARKUP_FETCH_RAYLIB "Fetch raylib via FetchContent" ON)
+option(MARKUP_WITH_BLUR "Build optional blur FX stub library" OFF)
+option(MARKUP_WITH_STYLE_FILE "Build optional stylesheet file parser stub" OFF)
+option(MARKUP_WITH_EXTRA_WIDGETS "Build optional extra widgets stub library" OFF)
 
-# Set build type
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
-endif()
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/markup/cmake")
 
-# Compiler flags
-if(MSVC)
-    add_compile_options(/W4)
-else()
-    add_compile_options(-Wall -Wextra -Wpedantic)
-endif()
-
-if(ENABLE_DEBUG)
-    add_compile_definitions(DEBUG)
-    if(MSVC)
-        add_compile_options(/Od /Zi)
-    else()
-        add_compile_options(-g -O0)
-    endif()
-else()
-    if(MSVC)
-        add_compile_options(/O2)
-    else()
-        add_compile_options(-O2)
-    endif()
-endif()
-
-# Find raylib
-find_package(raylib QUIET)
-if(NOT raylib_FOUND)
-    # Try to find raylib in common locations
-    find_library(RAYLIB_LIBRARY
-        NAMES raylib
-        PATHS
-        /usr/lib
-        /usr/local/lib
-        /opt/homebrew/lib
-        ${CMAKE_CURRENT_SOURCE_DIR}/external/raylib/lib
-        ${CMAKE_CURRENT_SOURCE_DIR}/external/raylib/src
+if(MARKUP_FETCH_RAYLIB)
+    include(FetchContent)
+    FetchContent_Declare(
+        raylib
+        GIT_REPOSITORY https://github.com/raysan5/raylib.git
+        GIT_TAG 5.0
+        GIT_SHALLOW TRUE
     )
-    
-    find_path(RAYLIB_INCLUDE_DIR
-        NAMES raylib.h
-        PATHS
-        /usr/include
-        /usr/local/include
-        /opt/homebrew/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/external/raylib/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/external/raylib/src
-    )
-    
-    if(RAYLIB_LIBRARY AND RAYLIB_INCLUDE_DIR)
-        set(raylib_LIBRARIES ${RAYLIB_LIBRARY})
-        set(raylib_INCLUDE_DIRS ${RAYLIB_INCLUDE_DIR})
-        set(raylib_FOUND TRUE)
-    else()
-        # If raylib is not found, try to build it from source
-        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/raylib/CMakeLists.txt")
-            message(STATUS "Building raylib from source...")
-            add_subdirectory(external/raylib)
-            set(raylib_LIBRARIES raylib)
-            set(raylib_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/raylib/src)
-            set(raylib_FOUND TRUE)
-        else()
-            message(FATAL_ERROR "raylib not found. Please install raylib or ensure it's in external/raylib/")
-        endif()
-    endif()
+    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(raylib)
+else()
+    find_package(raylib REQUIRED)
 endif()
 
-# Include directories
-include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-include_directories(${raylib_INCLUDE_DIRS})
-
-# Source files
-set(MARKUP_SOURCES
-    components/error_handling.c
-    components/button.c
-    components/panel.c
-    components/sidebar.c
-    components/slider.c
-    components/dropdown.c
-    components/text_input.c
-    components/text_area.c
-    components/checkbox.c
-    components/radio_button.c
-    components/modal.c
-    components/imagebox.c
-    components/separator.c
-    components/backdrop.c
-    components/blur_effect.c
-    components/shadow.c
-    components/loading_bar.c
-    components/spinner.c
-    components/background_image.c
-    # Add new components here as they are implemented
-    # components/tabs.c
-    # components/toast.c
-    # components/card.c
+add_library(markup_core STATIC
+    markup/src/mu_core.c
+    markup/src/mu_arena.c
+)
+target_include_directories(markup_core PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/markup/include>
+    $<INSTALL_INTERFACE:include>
 )
 
-# Header files
-set(MARKUP_HEADERS
-    markup.h
-    theme.h
-    components/error_handling.h
-    components/component_base.h
-    components/style_system.h
-    components/layout_engine.h
-    components/event_system.h
-    components/button.h
-    components/panel.h
-    components/sidebar.h
-    components/slider.h
-    components/dropdown.h
-    components/text_input.h
-    components/text_area.h
-    components/checkbox.h
-    components/radio_button.h
-    components/modal.h
-    components/imagebox.h
-    components/separator.h
-    components/backdrop.h
-    components/blur_effect.h
-    components/shadow.h
-    components/loading_bar.h
-    components/spinner.h
-    components/tabs.h
-    components/toast.h
-    components/card.h
-    components/background_image.h
+add_library(markup_layout_flex STATIC markup/src/mu_layout_flex.c)
+target_link_libraries(markup_layout_flex PUBLIC markup_core)
+
+add_library(markup_style STATIC markup/src/mu_style.c)
+target_link_libraries(markup_style PUBLIC markup_core)
+
+add_library(markup_input STATIC markup/src/mu_input.c)
+target_link_libraries(markup_input PUBLIC markup_core)
+
+add_library(markup_raylib STATIC markup/src/mu_raylib.c)
+target_link_libraries(markup_raylib PUBLIC markup_core markup_input)
+target_link_libraries(markup_raylib PRIVATE raylib)
+
+add_library(markup_widgets_basic STATIC markup/src/mu_widgets_basic.c)
+target_link_libraries(markup_widgets_basic PUBLIC
+    markup_core markup_layout_flex markup_style markup_raylib
+)
+target_link_libraries(markup_widgets_basic PRIVATE raylib)
+
+add_library(markup::core ALIAS markup_core)
+add_library(markup::layout_flex ALIAS markup_layout_flex)
+add_library(markup::style ALIAS markup_style)
+add_library(markup::input ALIAS markup_input)
+add_library(markup::raylib ALIAS markup_raylib)
+add_library(markup::widgets_basic ALIAS markup_widgets_basic)
+
+if(MARKUP_WITH_BLUR)
+    add_library(markup_fx_blur STATIC markup/src/mu_fx_blur.c)
+    target_link_libraries(markup_fx_blur PUBLIC markup_core)
+    add_library(markup::fx_blur ALIAS markup_fx_blur)
+endif()
+
+if(MARKUP_WITH_STYLE_FILE)
+    add_library(markup_style_parse STATIC markup/src/mu_style_parse.c)
+    target_link_libraries(markup_style_parse PUBLIC markup_style)
+    add_library(markup::style_parse ALIAS markup_style_parse)
+endif()
+
+if(MARKUP_WITH_EXTRA_WIDGETS)
+    add_library(markup_widgets_extra STATIC markup/src/mu_widgets_extra.c)
+    target_link_libraries(markup_widgets_extra PUBLIC markup_widgets_basic)
+    add_library(markup::widgets_extra ALIAS markup_widgets_extra)
+endif()
+
+set(MARKUP_DEMO_FONT_ABS "${CMAKE_CURRENT_SOURCE_DIR}/apps/demo_minimal/assets/InterVariable.ttf")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/apps/cmake/markup_demo_font_config.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/markup_demo_font_config.h"
+    @ONLY)
+
+add_library(markup_demo_font STATIC apps/demo_font.c)
+target_include_directories(markup_demo_font PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/apps>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+)
+target_link_libraries(markup_demo_font PRIVATE raylib markup_raylib)
+
+add_executable(demo_minimal apps/demo_minimal/main.c)
+target_link_libraries(demo_minimal PRIVATE
+    markup_demo_font markup_widgets_basic markup_raylib markup_style markup_layout_flex
+    markup_input markup_core raylib
+)
+set_target_properties(demo_minimal PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:demo_minimal>")
+add_custom_command(TARGET demo_minimal POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+    "${CMAKE_CURRENT_SOURCE_DIR}/apps/demo_minimal/assets"
+    "$<TARGET_FILE_DIR:demo_minimal>/assets"
 )
 
-# Create static library
-add_library(markup-ui STATIC ${MARKUP_SOURCES} ${MARKUP_HEADERS})
-target_link_libraries(markup-ui ${raylib_LIBRARIES})
-
-# Set library properties
-set_target_properties(markup-ui PROPERTIES
-    VERSION ${PROJECT_VERSION}
-    SOVERSION ${PROJECT_VERSION_MAJOR}
-    PUBLIC_HEADER "${MARKUP_HEADERS}"
+add_executable(demo_retheme apps/demo_retheme/main.c)
+target_link_libraries(demo_retheme PRIVATE
+    markup_demo_font markup_widgets_basic markup_raylib markup_style markup_layout_flex
+    markup_input markup_core raylib
+)
+set_target_properties(demo_retheme PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:demo_retheme>")
+add_custom_command(TARGET demo_retheme POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+    "${CMAKE_CURRENT_SOURCE_DIR}/apps/demo_minimal/assets"
+    "$<TARGET_FILE_DIR:demo_retheme>/assets"
 )
 
-# Install rules
-install(TARGETS markup-ui
-    EXPORT MarkUpUITargets
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-    RUNTIME DESTINATION bin
-    PUBLIC_HEADER DESTINATION include/markup-ui
+include(GNUInstallDirs)
+# install(EXPORT) on STATIC libs folds private deps (raylib) into the exported interface.
+# CMake then requires raylib (and GLFW) in the same export — not viable. Export only raylib-free
+# targets via MarkupTargets.cmake; markup::raylib / markup::widgets_basic are STATIC IMPORTED in
+# MarkupImportedRaylib.cmake after find_dependency(raylib).
+install(TARGETS markup_core markup_layout_flex markup_style markup_input
+    EXPORT MarkupTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+install(TARGETS markup_raylib markup_widgets_basic
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+install(DIRECTORY markup/include/markup DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(EXPORT MarkupTargets
+    FILE MarkupTargets.cmake
+    NAMESPACE markup::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Markup
 )
 
-# Install headers
-install(FILES ${MARKUP_HEADERS}
-    DESTINATION include/markup-ui
-)
-
-# Export targets
-install(EXPORT MarkUpUITargets
-    FILE MarkUpUITargets.cmake
-    NAMESPACE MarkUpUI::
-    DESTINATION lib/cmake/MarkUpUI
-)
-
-# Create config file
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(
-    MarkUpUIConfigVersion.cmake
+    "${CMAKE_CURRENT_BINARY_DIR}/MarkupConfigVersion.cmake"
     VERSION ${PROJECT_VERSION}
     COMPATIBILITY SameMajorVersion
 )
-
 configure_package_config_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/MarkUpUIConfig.cmake.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/MarkUpUIConfig.cmake"
-    INSTALL_DESTINATION lib/cmake/MarkUpUI
+    "${CMAKE_CURRENT_SOURCE_DIR}/markup/cmake/MarkupConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/MarkupConfig.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Markup
 )
-
 install(FILES
-    "${CMAKE_CURRENT_BINARY_DIR}/MarkUpUIConfig.cmake"
-    "${CMAKE_CURRENT_BINARY_DIR}/MarkUpUIConfigVersion.cmake"
-    DESTINATION lib/cmake/MarkUpUI
+    "${CMAKE_CURRENT_BINARY_DIR}/MarkupConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/MarkupConfigVersion.cmake"
+    "${CMAKE_CURRENT_SOURCE_DIR}/markup/cmake/MarkupImportedRaylib.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Markup
 )
-
-# Examples
-if(BUILD_EXAMPLES)
-    add_subdirectory(examples)
-endif()
-
-# Tests
-if(BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(tests)
-endif()
-
-# Print configuration summary
-message(STATUS "MarkUp UI Configuration:")
-message(STATUS "  Version: ${PROJECT_VERSION}")
-message(STATUS "  Build type: ${CMAKE_BUILD_TYPE}")
-message(STATUS "  Build examples: ${BUILD_EXAMPLES}")
-message(STATUS "  Build tests: ${BUILD_TESTS}")
-message(STATUS "  Debug mode: ${ENABLE_DEBUG}")
-message(STATUS "  raylib found: ${raylib_FOUND}")
-if(raylib_FOUND)
-    message(STATUS "  raylib version: ${raylib_VERSION}")
-endif()

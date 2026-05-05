@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Solution>
+	<Configurations>
+		<BuildType Name="Debug"/>
+		<BuildType Name="Release"/>
+		<BuildType Name="MinSizeRel"/>
+		<BuildType Name="RelWithDebInfo"/>
+		<Platform Name="x64"/>
+	</Configurations>
+	<Project Path="demo_minimal.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="070ca635-86bd-3950-8ae0-03f987ea1aec">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="_deps/raylib-build/raylib/external/glfw/src/glfw.vcxproj"/>
+		<BuildDependency Project="markup_core.vcxproj"/>
+		<BuildDependency Project="markup_demo_font.vcxproj"/>
+		<BuildDependency Project="markup_input.vcxproj"/>
+		<BuildDependency Project="markup_layout_flex.vcxproj"/>
+		<BuildDependency Project="markup_raylib.vcxproj"/>
+		<BuildDependency Project="markup_style.vcxproj"/>
+		<BuildDependency Project="markup_widgets_basic.vcxproj"/>
+		<BuildDependency Project="_deps/raylib-build/raylib/raylib.vcxproj"/>
+	</Project>
+	<Project Path="demo_retheme.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="6173f5e5-38c1-3643-88c8-600fd3c55c55">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="_deps/raylib-build/raylib/external/glfw/src/glfw.vcxproj"/>
+		<BuildDependency Project="markup_core.vcxproj"/>
+		<BuildDependency Project="markup_demo_font.vcxproj"/>
+		<BuildDependency Project="markup_input.vcxproj"/>
+		<BuildDependency Project="markup_layout_flex.vcxproj"/>
+		<BuildDependency Project="markup_raylib.vcxproj"/>
+		<BuildDependency Project="markup_style.vcxproj"/>
+		<BuildDependency Project="markup_widgets_basic.vcxproj"/>
+		<BuildDependency Project="_deps/raylib-build/raylib/raylib.vcxproj"/>
+	</Project>
+	<Project Path="markup_core.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="85adbf90-8b86-32fe-a73c-19d4d53c218f">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+	</Project>
+	<Project Path="markup_demo_font.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="808005c9-12c4-31e1-b331-572fe13f4d7d">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="_deps/raylib-build/raylib/external/glfw/src/glfw.vcxproj"/>
+		<BuildDependency Project="markup_core.vcxproj"/>
+		<BuildDependency Project="markup_input.vcxproj"/>
+		<BuildDependency Project="markup_raylib.vcxproj"/>
+		<BuildDependency Project="_deps/raylib-build/raylib/raylib.vcxproj"/>
+	</Project>
+	<Project Path="markup_input.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="d8db38ad-32f9-350c-a21c-b50ffd78e781">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="markup_core.vcxproj"/>
+	</Project>
+	<Project Path="markup_layout_flex.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="44d54839-2c18-3b2f-bc7e-4a95d5d5275a">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="markup_core.vcxproj"/>
+	</Project>
+	<Project Path="markup_raylib.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="de7455d5-2a25-349a-a207-2d78599a0431">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="_deps/raylib-build/raylib/external/glfw/src/glfw.vcxproj"/>
+		<BuildDependency Project="markup_core.vcxproj"/>
+		<BuildDependency Project="markup_input.vcxproj"/>
+		<BuildDependency Project="_deps/raylib-build/raylib/raylib.vcxproj"/>
+	</Project>
+	<Project Path="markup_style.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="8a2829eb-bb5f-3f5b-96e4-18e8d943e0ab">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="markup_core.vcxproj"/>
+	</Project>
+	<Project Path="markup_widgets_basic.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="d9707d36-df0a-3f5b-8c01-8942d5ae52c8">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="_deps/raylib-build/raylib/external/glfw/src/glfw.vcxproj"/>
+		<BuildDependency Project="markup_core.vcxproj"/>
+		<BuildDependency Project="markup_input.vcxproj"/>
+		<BuildDependency Project="markup_layout_flex.vcxproj"/>
+		<BuildDependency Project="markup_raylib.vcxproj"/>
+		<BuildDependency Project="markup_style.vcxproj"/>
+		<BuildDependency Project="_deps/raylib-build/raylib/raylib.vcxproj"/>
+	</Project>
+	<Project Path="_deps/raylib-build/raylib/raylib.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="5293cc17-1207-3c7f-8959-e2ea9ab2afa8">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="_deps/raylib-build/raylib/external/glfw/src/glfw.vcxproj"/>
+	</Project>
+	<Project Path="_deps/raylib-build/uninstall.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="7d89ff03-c6e9-3fa2-9503-a0ec0a4a60fc">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<Build Solution="Debug|*" Project="false"/>
+		<Build Solution="Release|*" Project="false"/>
+		<Build Solution="MinSizeRel|*" Project="false"/>
+		<Build Solution="RelWithDebInfo|*" Project="false"/>
+	</Project>
+	<Folder Name="/CMakePredefinedTargets/">
+		<Project Path="ALL_BUILD.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="ae9fc30e-777f-314a-85ed-739f832b4100" DefaultStartup="true">
+			<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+			<BuildDependency Project="demo_minimal.vcxproj"/>
+			<BuildDependency Project="demo_retheme.vcxproj"/>
+			<BuildDependency Project="_deps/raylib-build/raylib/external/glfw/src/glfw.vcxproj"/>
+			<BuildDependency Project="markup_core.vcxproj"/>
+			<BuildDependency Project="markup_demo_font.vcxproj"/>
+			<BuildDependency Project="markup_input.vcxproj"/>
+			<BuildDependency Project="markup_layout_flex.vcxproj"/>
+			<BuildDependency Project="markup_raylib.vcxproj"/>
+			<BuildDependency Project="markup_style.vcxproj"/>
+			<BuildDependency Project="markup_widgets_basic.vcxproj"/>
+			<BuildDependency Project="_deps/raylib-build/raylib/raylib.vcxproj"/>
+		</Project>
+		<Project Path="INSTALL.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="4408f96d-cff1-3fcb-bd4a-20510517c063">
+			<BuildDependency Project="ALL_BUILD.vcxproj"/>
+			<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+			<Build Solution="Debug|*" Project="false"/>
+			<Build Solution="Release|*" Project="false"/>
+			<Build Solution="MinSizeRel|*" Project="false"/>
+			<Build Solution="RelWithDebInfo|*" Project="false"/>
+		</Project>
+		<Project Path="PACKAGE.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="764a0b59-dbf9-3993-a68d-ac354107574d">
+			<BuildDependency Project="ALL_BUILD.vcxproj"/>
+			<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+			<Build Solution="Debug|*" Project="false"/>
+			<Build Solution="Release|*" Project="false"/>
+			<Build Solution="MinSizeRel|*" Project="false"/>
+			<Build Solution="RelWithDebInfo|*" Project="false"/>
+		</Project>
+		<Project Path="ZERO_CHECK.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="e016f8fc-9b55-3829-861c-02250d4ccf22"/>
+	</Folder>
+	<Folder Name="/GLFW3/">
+		<Project Path="_deps/raylib-build/raylib/external/glfw/src/glfw.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="484e1e43-7304-34ed-9303-134a102becf1">
+			<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		</Project>
+		<Project Path="_deps/raylib-build/raylib/external/glfw/src/update_mappings.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="451279de-71ec-370e-9fe8-2ab257f6f416">
+			<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+			<Build Solution="Debug|*" Project="false"/>
+			<Build Solution="Release|*" Project="false"/>
+			<Build Solution="MinSizeRel|*" Project="false"/>
+			<Build Solution="RelWithDebInfo|*" Project="false"/>
+		</Project>
+	</Folder>
+</Solution>

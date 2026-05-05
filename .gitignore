@@ -1,50 +1,136 @@
-# Build directories
+################################################################################
+# Markup — keep working trees clean before push (CMake, VS, Clang, tooling)
+################################################################################
+
+# ------------------------------------------------------------------------------
+# Build trees & install prefixes
+# ------------------------------------------------------------------------------
 build/
-Debug/
-Release/
-x64/
-x86/
+build-*/
+cmake-build*/
+out/
+out-*/
+cmake-out/
+dist/
+prefix/
+install/
+.vs/
 
-# CMake generated files
+# MSVC / VS "folder" layouts (CMake -G "Visual Studio ..." artifacts next to CMakeLists.txt)
+[Bb][Dd]ebug/
+[Rr]elease/
+[Rr]el[Ww]ith[Dd][Ee][Bb][Ii][Nn][Ff]o/
+[Mm][Ii][Nn][Ss][Ii][Zz][Ee][Rr][Ee][Ll]/
+*x64*/
+*x86*/
+*ARM64*/
+*Win32*/
+
+# Per-target MSVC folders (demo_minimal.dir/, markup_widgets_basic.dir/, ...)
+*.dir/
+
+# ------------------------------------------------------------------------------
+# CMake (in-source configure artifacts)
+# ------------------------------------------------------------------------------
 CMakeCache.txt
+CMakeScripts/
+CTestTestfile.cmake
+_deps/
+DartConfiguration.tcl
+
+# Recursive CMake outputs (in-tree builds)
 CMakeFiles/
-cmake_install.cmake
-Makefile
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
+# Root-level single-file CMake outputs (Makefile generator)
+/Makefile
+/cmake_install.cmake
+/install_manifest*.txt
+
+# ------------------------------------------------------------------------------
+# FetchContent / ExternalProject (often under build/, but standalone too)
+# ------------------------------------------------------------------------------
+external/raylib/
+external/raylib-src/
+external/raylib-build/
+external/raylib-subbuild/
+
+# ------------------------------------------------------------------------------
+# Compiled objects & binaries (global)
+# ------------------------------------------------------------------------------
 *.obj
-
-# Precompiled Headers
-*.gch
+*.o
+*.obj/
 *.pch
+*.gch
+*.lo
+*.slo
 
-# Compiled Dynamic libraries
+*.dll
 *.so
 *.dylib
-*.dll
-
-# Compiled Static libraries
-*.lai
-*.la
 *.a
 *.lib
+*.lai
+*.la
 
-# Executables
 *.exe
 *.out
 *.app
 
-# IDE files
-.vscode/
+# ------------------------------------------------------------------------------
+# Toolchain / MSVC extras
+# ------------------------------------------------------------------------------
+*.ilk
+*.pdb
+*.pgc
+*.pgd
+*.rsp
+*.sbr
+*.tlb
+*.tli
+*.tlh
+*.tmp
+*.tmp_proj
+*_wpftmp.csproj
+
+# ------------------------------------------------------------------------------
+# Visual Studio user / local solution state (safe to regenerate)
+# ------------------------------------------------------------------------------
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.VC.opendb
+
+# Rider / ReSharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+
+# CMake user presets (machine-specific); keep CMakePresets.json in git
+CMakeUserPresets.json
+
+# ------------------------------------------------------------------------------
+# IDEs / editors
+# ------------------------------------------------------------------------------
 .idea/
 *.swp
 *.swo
 *~
 
-# OS generated files
+# VS Code (local/machine paths leak easily; use CMakePresets + README instead)
+.vscode/
+
+# ------------------------------------------------------------------------------
+# Language servers & caches (local only)
+# ------------------------------------------------------------------------------
+.cache/
+.clangd/
+
+# ------------------------------------------------------------------------------
+# OS junk
+# ------------------------------------------------------------------------------
 .DS_Store
 .DS_Store?
 ._*
@@ -52,35 +138,34 @@ Makefile
 .Trashes
 ehthumbs.db
 Thumbs.db
+Desktop.ini
 
-# Logs
+# ------------------------------------------------------------------------------
+# Logs & backups
+# ------------------------------------------------------------------------------
 *.log
-
-# Temporary files
-*.tmp
-*.temp
-
-# Backup files
 *.bak
 *.backup
 
-# Font files (if you want to exclude them)
-# fonts/*.ttf
-# fonts/*.otf
-# fonts/*.woff
-
-# Example outputs
-example_*
-demo
-showcase
-
-# External dependencies
-external/raylib/
-external/raylib-src/
-external/raylib-build/
-external/raylib-subbuild/
-_deps/
-
-# Development and specification files
-.kiro/
+# ------------------------------------------------------------------------------
+# Local env & tooling (never publish secrets)
+# ------------------------------------------------------------------------------
 .env
+.env.*
+!.env.example
+
+# ------------------------------------------------------------------------------
+# Agents / assistants / ephemeral project metadata (don't ship with the library)
+# ------------------------------------------------------------------------------
+.claude/
+.cursor/
+**/agent-transcripts/
+mcps/
+
+# Internal / scaffold only
+.kiro/
+
+# ------------------------------------------------------------------------------
+# Legacy & optional local archives (v2 CMake does not use this tree)
+# ------------------------------------------------------------------------------
+[Vv]1 legacy/

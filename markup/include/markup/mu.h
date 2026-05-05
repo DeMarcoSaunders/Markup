@@ -1,0 +1,7 @@
+/* Convenience umbrella — include specific `markup/*.h` headers to trim compile time. */
+#include "markup/mu_core.h"
+#include "markup/mu_layout_flex.h"
+#include "markup/mu_style.h"
+#include "markup/mu_input.h"
+#include "markup/mu_raylib.h"
+#include "markup/mu_widgets_basic.h"

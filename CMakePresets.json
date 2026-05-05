@@ -1,0 +1,44 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 16,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "msvc-x64",
+      "displayName": "MSVC x64 — Visual Studio 18 2026",
+      "description": "Needs CMake 4.2+ (lists 'Visual Studio 18 2026' in 'cmake --help'). If configure fails, use msvc-x64-vs2022 or upgrade CMake from cmake.org.",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "MARKUP_FETCH_RAYLIB": "ON"
+      }
+    },
+    {
+      "name": "msvc-x64-vs2022",
+      "displayName": "MSVC x64 — Visual Studio 17 2022 generator (fallback)",
+      "description": "Use when your cmake --help does not list 'Visual Studio 18 2026'. Works with CMake 3.24+ and a VS install that CMake can detect (often VS 2022 Build Tools; may not match a VS-only-2026 layout).",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-vs2022",
+      "cacheVariables": {
+        "MARKUP_FETCH_RAYLIB": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "msvc-release",
+      "configurePreset": "msvc-x64",
+      "configuration": "Release"
+    },
+    {
+      "name": "msvc-release-vs2022",
+      "configurePreset": "msvc-x64-vs2022",
+      "configuration": "Release"
+    }
+  ]
+}
