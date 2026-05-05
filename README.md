@@ -50,8 +50,8 @@ Ensure `raylib` is a CMake target/`find_package`-visible before configuring Mark
 ```cmake
 include(FetchContent)
 FetchContent_Declare(markup_upstream
-    GIT_REPOSITORY https://github.com/<you>/Markup.git # replace URL
-    GIT_TAG        main                                   # pin a tag/sha when shipping
+    GIT_REPOSITORY https://github.com/DeMarcoSaunders/Markup.git
+    GIT_TAG        main                                  
 )
 FetchContent_MakeAvailable(markup_upstream)
 
