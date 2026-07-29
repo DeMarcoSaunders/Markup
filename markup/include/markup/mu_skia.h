@@ -1,6 +1,12 @@
 #ifndef MU_SKIA_H
 #define MU_SKIA_H
 
+/* Backends declare incompatible `struct MuRenderContext` layouts; only one may be visible. */
+#ifdef MU_RENDER_BACKEND_SELECTED
+#error "Markup: another backend header is already included in this translation unit. struct MuRenderContext layouts conflict; include only one backend (see mu_backend.h)."
+#endif
+#define MU_RENDER_BACKEND_SELECTED 1
+
 #include "mu_render.h"
 
 #ifdef __cplusplus

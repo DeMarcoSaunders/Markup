@@ -9,8 +9,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Context bound for metric queries made during layout, where no rc is threaded through
+ * (see mu_render_bind_measure). Also backs mu_raylib_ui_font(). */
 static MuRenderContext *g_mu_measure_rc;
-static Font g_mu_ui_font;
 
 void mu_render_bind_measure(MuRenderContext *rc) {
     g_mu_measure_rc = rc;
@@ -36,10 +37,7 @@ static void raylib_set_slot(MuRenderContext *rc, int slot, Font font, bool owned
     else
         rc->fonts[slot].family[0] = '\0';
     mu_apply_font_filter(font);
-    if (slot == 0) {
-        rc->font = font;
-        g_mu_ui_font = font;
-    }
+    if (slot == 0) rc->font = font;
     if (slot >= rc->font_count) rc->font_count = slot + 1;
 }
 
@@ -70,11 +68,11 @@ void mu_render_shutdown(MuRenderContext *rc) {
     rc->image_count = 0;
     rc->font_loaded = false;
     rc->font = GetFontDefault();
-    g_mu_ui_font = rc->font;
 }
 
 Font mu_raylib_ui_font(void) {
-    return g_mu_ui_font;
+    MuRenderContext *rc = g_mu_measure_rc;
+    return rc ? rc->fonts[0].font : GetFontDefault();
 }
 
 void mu_render_set_font(MuRenderContext *rc, Font font, bool take_ownership) {
@@ -169,7 +167,7 @@ void mu_draw_image(MuRenderContext *rc, uint32_t image_id, MuRect dst, const MuD
 }
 
 static Font raylib_resolve_font(MuRenderContext *rc, const MuTextStyle *style) {
-    Font fallback = rc ? rc->fonts[0].font : g_mu_ui_font;
+    Font fallback = rc ? rc->fonts[0].font : GetFontDefault();
     if (!rc || !style || style->font_id == MU_FONT_DEFAULT)
         return fallback;
     if (style->font_id >= (uint32_t)rc->font_count)

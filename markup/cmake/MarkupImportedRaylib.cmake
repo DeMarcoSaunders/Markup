@@ -19,9 +19,13 @@ set(_m_markup_wb_lib "${CMAKE_STATIC_LIBRARY_PREFIX}markup_widgets_basic${CMAKE_
 if(NOT TARGET markup::raylib)
     add_library(markup::raylib STATIC IMPORTED GLOBAL)
 endif()
+# Mirrors target_compile_definitions(markup_raylib PUBLIC ...) from the build tree, so installed
+# consumers get the same automatic backend selection in mu_backend.h. Without this, including
+# mu.h / mu_backend.h after find_package(Markup) fails with "no rendering backend selected".
 set_target_properties(markup::raylib PROPERTIES
     IMPORTED_LOCATION "${_markup_libdir}/${_m_markup_rl_lib}"
     INTERFACE_LINK_LIBRARIES "markup::core;markup::input;$<LINK_ONLY:raylib>"
+    INTERFACE_COMPILE_DEFINITIONS "MU_BACKEND_RAYLIB=1"
 )
 
 if(NOT TARGET markup::widgets_basic)

@@ -68,6 +68,8 @@ endif()
 add_library(markup_raylib STATIC markup/src/mu_raylib.c)
 target_link_libraries(markup_raylib PUBLIC markup_core markup_input markup_paint
     PRIVATE markup_widgets_basic raylib)
+# PUBLIC so consumers select the matching struct MuRenderContext layout by linking (see mu_backend.h).
+target_compile_definitions(markup_raylib PUBLIC MU_BACKEND_RAYLIB=1)
 
 add_library(markup_widgets_basic STATIC markup/src/mu_widgets_basic.c markup/src/mu_scroll.c markup/src/mu_popup.c markup/src/mu_list.c markup/src/mu_tabs.c markup/src/mu_textinput.c)
 target_link_libraries(markup_widgets_basic PUBLIC
@@ -192,6 +194,8 @@ if(MARKUP_WITH_SKIA)
     target_include_directories(markup_skia PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/markup/include>
     )
+    # PUBLIC so consumers select the matching struct MuRenderContext layout by linking (see mu_backend.h).
+    target_compile_definitions(markup_skia PUBLIC MU_BACKEND_SKIA=1)
 
     add_library(markup_sdl STATIC markup/src/mu_sdl.c)
     target_link_libraries(markup_sdl PUBLIC markup_core markup_input markup_skia ${MARKUP_SDL3_LIB}
