@@ -1,14 +1,46 @@
 #include "../include/markup/mu_raylib.h"
+#include "../include/markup/mu_image.h"
 #include "../include/markup/mu_input.h"
+#include "../include/markup/mu_popup.h"
+#include "../include/markup/mu_widgets_basic.h"
+#include "../include/markup/mu_render.h"
+#include "../include/markup/mu_text.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
+static MuRenderContext *g_mu_measure_rc;
 static Font g_mu_ui_font;
+
+void mu_render_bind_measure(MuRenderContext *rc) {
+    g_mu_measure_rc = rc;
+}
+
+static MuRenderContext *measure_rc(MuRenderContext *rc) {
+    return rc ? rc : g_mu_measure_rc;
+}
 
 static void mu_apply_font_filter(Font f) {
     if (f.texture.id != 0)
         SetTextureFilter(f.texture, TEXTURE_FILTER_BILINEAR);
+}
+
+static void raylib_set_slot(MuRenderContext *rc, int slot, Font font, bool owned, const char *family) {
+    if (!rc || slot < 0 || slot >= MU_FONT_MAX) return;
+    if (rc->fonts[slot].owned && rc->fonts[slot].font.texture.id != 0)
+        UnloadFont(rc->fonts[slot].font);
+    rc->fonts[slot].font = font;
+    rc->fonts[slot].owned = owned;
+    if (family)
+        snprintf(rc->fonts[slot].family, sizeof(rc->fonts[slot].family), "%s", family);
+    else
+        rc->fonts[slot].family[0] = '\0';
+    mu_apply_font_filter(font);
+    if (slot == 0) {
+        rc->font = font;
+        g_mu_ui_font = font;
+    }
+    if (slot >= rc->font_count) rc->font_count = slot + 1;
 }
 
 Color mu_to_ray(MuColor c) {
@@ -17,17 +49,25 @@ Color mu_to_ray(MuColor c) {
 
 void mu_render_init(MuRenderContext *rc) {
     memset(rc, 0, sizeof(*rc));
-    rc->font = GetFontDefault();
+    Font def = GetFontDefault();
+    raylib_set_slot(rc, 0, def, false, "default");
     rc->font_loaded = false;
-    g_mu_ui_font = rc->font;
-    mu_apply_font_filter(rc->font);
+    rc->image_count = 1;
 }
 
 void mu_render_shutdown(MuRenderContext *rc) {
     if (!rc)
         return;
-    if (rc->font_loaded)
-        UnloadFont(rc->font);
+    for (int i = 0; i < rc->font_count; i++) {
+        if (rc->fonts[i].owned && rc->fonts[i].font.texture.id != 0)
+            UnloadFont(rc->fonts[i].font);
+    }
+    for (int i = 0; i < rc->image_count; i++) {
+        if (rc->images[i].owned && rc->images[i].texture.id != 0)
+            UnloadTexture(rc->images[i].texture);
+    }
+    rc->font_count = 0;
+    rc->image_count = 0;
     rc->font_loaded = false;
     rc->font = GetFontDefault();
     g_mu_ui_font = rc->font;
@@ -42,10 +82,134 @@ void mu_render_set_font(MuRenderContext *rc, Font font, bool take_ownership) {
         return;
     if (rc->font_loaded)
         UnloadFont(rc->font);
-    rc->font = font;
+    raylib_set_slot(rc, 0, font, take_ownership, NULL);
     rc->font_loaded = take_ownership;
-    g_mu_ui_font = font;
-    mu_apply_font_filter(font);
+}
+
+uint32_t mu_font_load_file(MuRenderContext *rc, const char *path, const char *family_name) {
+    if (!rc || !path || !path[0] || rc->font_count >= MU_FONT_MAX)
+        return MU_FONT_DEFAULT;
+    Font f = LoadFont(path);
+    if (f.texture.id == 0)
+        return MU_FONT_DEFAULT;
+    int id = rc->font_count;
+    raylib_set_slot(rc, id, f, true, family_name ? family_name : path);
+    return (uint32_t)id;
+}
+
+static Texture2D *raylib_resolve_image(MuRenderContext *rc, uint32_t image_id) {
+    if (!rc || image_id == MU_IMAGE_INVALID || image_id >= (uint32_t)rc->image_count)
+        return NULL;
+    if (rc->images[image_id].texture.id == 0)
+        return NULL;
+    return &rc->images[image_id].texture;
+}
+
+uint32_t mu_image_load_file(MuRenderContext *rc, const char *path) {
+    if (!rc || !path || !path[0] || rc->image_count >= MU_IMAGE_MAX)
+        return MU_IMAGE_INVALID;
+    Texture2D tex = LoadTexture(path);
+    if (tex.id == 0) {
+        MuImageRgba rgba = {0};
+        if (mu_image_decode_rgba_file(path, &rgba)) {
+            Image img = {
+                .data = rgba.pixels,
+                .width = rgba.width,
+                .height = rgba.height,
+                .mipmaps = 1,
+                .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
+            };
+            tex = LoadTextureFromImage(img);
+            mu_image_rgba_free(&rgba);
+        }
+    }
+    if (tex.id == 0)
+        return MU_IMAGE_INVALID;
+    SetTextureFilter(tex, TEXTURE_FILTER_BILINEAR);
+    int id = rc->image_count++;
+    rc->images[id].texture = tex;
+    rc->images[id].owned = true;
+    rc->images[id].width = (float)tex.width;
+    rc->images[id].height = (float)tex.height;
+    return (uint32_t)id;
+}
+
+bool mu_image_get_size(MuRenderContext *rc, uint32_t image_id, float *out_w, float *out_h) {
+    rc = measure_rc(rc);
+    if (!rc || image_id == MU_IMAGE_INVALID || image_id >= (uint32_t)rc->image_count)
+        return false;
+    if (rc->images[image_id].texture.id == 0)
+        return false;
+    if (out_w) *out_w = rc->images[image_id].width;
+    if (out_h) *out_h = rc->images[image_id].height;
+    return true;
+}
+
+void mu_draw_image(MuRenderContext *rc, uint32_t image_id, MuRect dst, const MuDrawImageOpts *opts) {
+    Texture2D *tex = raylib_resolve_image(rc, image_id);
+    if (!tex || dst.w < 1.f || dst.h < 1.f)
+        return;
+
+    MuDrawImageOpts defaults;
+    if (!opts) {
+        mu_draw_image_opts_init(&defaults);
+        opts = &defaults;
+    }
+
+    float tex_w = (float)tex->width;
+    float tex_h = (float)tex->height;
+    MuRect src_px;
+    if (!mu_image_resolve_src(&opts->src, tex_w, tex_h, &src_px)) return;
+
+    MuRect draw = mu_image_fit_dst(src_px.w, src_px.h, dst, opts->fit);
+    Rectangle src = {src_px.x, src_px.y, src_px.w, src_px.h};
+    Rectangle dest = {draw.x, draw.y, draw.w, draw.h};
+    Color tint = mu_to_ray(opts->tint);
+    DrawTexturePro(*tex, src, dest, (Vector2){0, 0}, 0.f, tint);
+}
+
+static Font raylib_resolve_font(MuRenderContext *rc, const MuTextStyle *style) {
+    Font fallback = rc ? rc->fonts[0].font : g_mu_ui_font;
+    if (!rc || !style || style->font_id == MU_FONT_DEFAULT)
+        return fallback;
+    if (style->font_id >= (uint32_t)rc->font_count)
+        return fallback;
+    Font f = rc->fonts[style->font_id].font;
+    return f.texture.id != 0 ? f : fallback;
+}
+
+static void raylib_draw_text_ex(Font f, const char *text, Vector2 pos, float size, float spacing, Color col,
+                                int weight, int italic) {
+    DrawTextEx(f, text, pos, size, spacing, col);
+    if (weight >= 600)
+        DrawTextEx(f, text, (Vector2){pos.x + 1.f, pos.y}, size, spacing, col);
+    if (italic > 0)
+        DrawTextEx(f, text, (Vector2){pos.x + 2.f, pos.y - 0.5f}, size, spacing, col);
+}
+
+void mu_text_measure(MuRenderContext *rc, const char *text, const MuTextStyle *style, MuTextMetrics *out) {
+    rc = measure_rc(rc);
+    if (!out) return;
+    out->width = 0.f;
+    out->height = 0.f;
+    if (!text) return;
+
+    MuTextStyle defaults;
+    if (!style) {
+        mu_text_style_init(&defaults);
+        defaults.size = 16.f;
+        defaults.letter_spacing = 1.f;
+        style = &defaults;
+    }
+
+    Font f = raylib_resolve_font(rc, style);
+    float size = style->size > 0.f ? style->size : 16.f;
+    float spacing = style->letter_spacing >= 0.f ? style->letter_spacing : 1.f;
+    Vector2 sz = MeasureTextEx(f, text, size, spacing);
+    if (style->weight >= 600) sz.x += 1.f;
+    if (style->italic > 0) sz.x += 2.f;
+    out->width = sz.x;
+    out->height = sz.y;
 }
 
 void mu_render_begin(MuRenderContext *rc) {
@@ -76,7 +240,6 @@ static void draw_rounded_rect(float x, float y, float w, float h, float radius_p
     }
     if (w < 1.f || h < 1.f)
         return;
-    /* raylib expects roundness in (0..1]; corner r = min(w,h)*roundness/2 */
     float m = (w < h) ? w : h;
     float roundness = (2.f * radius_px) / m;
     if (roundness > 1.f)
@@ -92,26 +255,23 @@ void mu_draw_rect(MuRenderContext *rc, MuRect r, MuColor fill, MuColor border, f
         DrawRectangleLinesEx((Rectangle){r.x, r.y, r.w, r.h}, border_w, mu_to_ray(border));
 }
 
-void mu_draw_text(MuRenderContext *rc, const char *text, float x, float y, float font_size, MuColor fg) {
+void mu_draw_text(MuRenderContext *rc, const char *text, float x, float y, const MuTextStyle *style, MuColor fg) {
     if (!text) return;
-    DrawTextEx(rc->font, text, (Vector2){x, y}, font_size, 1.0f, mu_to_ray(fg));
-}
 
-void mu_paint_tree(MuContext *ctx, MuRenderContext *rc, MuNode *node) {
-    if (!node || !(node->flags & MU_NODE_VISIBLE)) return;
-    if (node->flags & MU_NODE_CLIP_CHILDREN) mu_push_scissor(rc, node->bounds);
+    MuTextStyle defaults;
+    if (!style) {
+        mu_text_style_init(&defaults);
+        defaults.size = 16.f;
+        defaults.letter_spacing = 1.f;
+        style = &defaults;
+    }
 
-    const MuNodeOps *ops = mu_get_node_ops(ctx, node->kind);
-    if (ops && ops->paint) ops->paint(ctx, node, rc);
-
-    for (int i = 0; i < node->child_count; i++) mu_paint_tree(ctx, rc, node->children[i]);
-
-    if (node->flags & MU_NODE_CLIP_CHILDREN) mu_pop_scissor(rc);
-}
-
-void mu_paint_all(MuContext *ctx, MuRenderContext *rc) {
-    if (ctx->root) mu_paint_tree(ctx, rc, ctx->root);
-    if (ctx->modal_layer && (ctx->modal_layer->flags & MU_NODE_VISIBLE)) mu_paint_tree(ctx, rc, ctx->modal_layer);
+    Font f = raylib_resolve_font(rc, style);
+    float size = style->size > 0.f ? style->size : 16.f;
+    float spacing = style->letter_spacing >= 0.f ? style->letter_spacing : 1.f;
+    int weight = style->weight > 0 ? style->weight : MU_TEXT_WEIGHT_NORMAL;
+    int italic = style->italic > 0 ? 1 : 0;
+    raylib_draw_text_ex(f, text, (Vector2){x, y}, size, spacing, mu_to_ray(fg), weight, italic);
 }
 
 static void raylib_dispatch_input(MuContext *ctx) {
@@ -123,10 +283,12 @@ static void raylib_dispatch_input(MuContext *ctx) {
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         ev.button = 0;
         ev.pressed = true;
+        mu_popups_dispatch_pointer(ctx, &ev);
         mu_input_dispatch_pointer(ctx, &ev);
     } else if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
         ev.button = 0;
         ev.released = true;
+        mu_popups_dispatch_pointer(ctx, &ev);
         mu_input_dispatch_pointer(ctx, &ev);
     }
 
@@ -134,12 +296,35 @@ static void raylib_dispatch_input(MuContext *ctx) {
         mu_focus_advance_tab(ctx);
     }
 
-    if (IsKeyPressed(KEY_BACKSPACE)) {
-        MuKeyEvent ke = {KEY_BACKSPACE, true, false};
-        mu_input_dispatch_key(ctx, &ke);
+    MuNode *focused = mu_context_find_id(ctx, NULL, ctx->focused_id);
+    bool text_focus = focused && focused->role && strcmp(focused->role, "input") == 0;
+    if (text_focus) {
+        if (IsKeyPressed(KEY_BACKSPACE)) {
+            MuKeyEvent ke = {MU_KEY_BACKSPACE, true, false};
+            mu_input_dispatch_key(ctx, &ke);
+        }
+        if (IsKeyPressed(KEY_DELETE)) {
+            MuKeyEvent ke = {MU_KEY_DELETE, true, false};
+            mu_input_dispatch_key(ctx, &ke);
+        }
+        if (IsKeyPressed(KEY_LEFT)) {
+            MuKeyEvent ke = {MU_KEY_LEFT, true, false};
+            mu_input_dispatch_key(ctx, &ke);
+        }
+        if (IsKeyPressed(KEY_RIGHT)) {
+            MuKeyEvent ke = {MU_KEY_RIGHT, true, false};
+            mu_input_dispatch_key(ctx, &ke);
+        }
+        if (IsKeyPressed(KEY_HOME)) {
+            MuKeyEvent ke = {MU_KEY_HOME, true, false};
+            mu_input_dispatch_key(ctx, &ke);
+        }
+        if (IsKeyPressed(KEY_END)) {
+            MuKeyEvent ke = {MU_KEY_END, true, false};
+            mu_input_dispatch_key(ctx, &ke);
+        }
     }
 
-    MuNode *focused = mu_context_find_id(ctx, NULL, ctx->focused_id);
     if (focused) {
         int ch;
         while ((ch = GetCharPressed()) > 0)
@@ -152,6 +337,9 @@ static void raylib_dispatch_input(MuContext *ctx) {
         ev2.drag = true;
         mu_input_dispatch_pointer(ctx, &ev2);
     }
+
+    float wheel = GetMouseWheelMove();
+    if (wheel != 0.f) mu_widgets_dispatch_wheel(ctx, mp, 0.f, wheel);
 }
 
 void mu_raylib_frame(MuContext *ctx, MuRenderContext *rc) {

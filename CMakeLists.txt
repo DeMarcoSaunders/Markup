@@ -12,6 +12,8 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 option(MARKUP_FETCH_RAYLIB "Fetch raylib via FetchContent" ON)
+option(MARKUP_WITH_SKIA "Build Skia + SDL3 desktop backend and demo_skia" OFF)
+option(MARKUP_FETCH_SDL3 "Fetch SDL3 via FetchContent when MARKUP_WITH_SKIA is ON" ON)
 option(MARKUP_WITH_BLUR "Build optional blur FX stub library" OFF)
 option(MARKUP_WITH_STYLE_FILE "Build optional stylesheet file parser stub" OFF)
 option(MARKUP_WITH_EXTRA_WIDGETS "Build optional extra widgets stub library" OFF)
@@ -29,7 +31,7 @@ if(MARKUP_FETCH_RAYLIB)
     set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(raylib)
-else()
+elseif(NOT MARKUP_WITH_SKIA)
     find_package(raylib REQUIRED)
 endif()
 
@@ -45,21 +47,42 @@ target_include_directories(markup_core PUBLIC
 add_library(markup_layout_flex STATIC markup/src/mu_layout_flex.c)
 target_link_libraries(markup_layout_flex PUBLIC markup_core)
 
-add_library(markup_style STATIC markup/src/mu_style.c)
+add_library(markup_style STATIC
+    markup/src/mu_style.c
+    markup/src/mu_text.c
+    markup/src/mu_text_layout.c
+)
 target_link_libraries(markup_style PUBLIC markup_core)
 
 add_library(markup_input STATIC markup/src/mu_input.c)
 target_link_libraries(markup_input PUBLIC markup_core)
 
-add_library(markup_raylib STATIC markup/src/mu_raylib.c)
-target_link_libraries(markup_raylib PUBLIC markup_core markup_input)
-target_link_libraries(markup_raylib PRIVATE raylib)
+add_library(markup_paint STATIC markup/src/mu_paint.c markup/src/mu_image_util.c markup/src/mu_image_decode.c)
+target_link_libraries(markup_paint PUBLIC markup_core)
+find_package(PNG QUIET)
+if(PNG_FOUND)
+    target_compile_definitions(markup_paint PRIVATE MU_HAVE_LIBPNG=1)
+    target_link_libraries(markup_paint PUBLIC PNG::PNG)
+endif()
 
-add_library(markup_widgets_basic STATIC markup/src/mu_widgets_basic.c)
+add_library(markup_raylib STATIC markup/src/mu_raylib.c)
+target_link_libraries(markup_raylib PUBLIC markup_core markup_input markup_paint
+    PRIVATE markup_widgets_basic raylib)
+
+add_library(markup_widgets_basic STATIC markup/src/mu_widgets_basic.c markup/src/mu_scroll.c markup/src/mu_popup.c markup/src/mu_list.c markup/src/mu_tabs.c markup/src/mu_textinput.c)
 target_link_libraries(markup_widgets_basic PUBLIC
-    markup_core markup_layout_flex markup_style markup_raylib
+    markup_core markup_layout_flex markup_style markup_paint
 )
-target_link_libraries(markup_widgets_basic PRIVATE raylib)
+
+add_library(markup_compose STATIC markup/src/mu_compose.c)
+target_link_libraries(markup_compose PUBLIC markup_widgets_basic markup_layout_flex)
+target_include_directories(markup_compose PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/markup/include>
+)
+
+add_library(markup::compose ALIAS markup_compose)
+
+add_library(markup::paint ALIAS markup_paint)
 
 add_library(markup::core ALIAS markup_core)
 add_library(markup::layout_flex ALIAS markup_layout_flex)
@@ -97,8 +120,11 @@ target_include_directories(markup_demo_font PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/apps>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
 )
-target_link_libraries(markup_demo_font PRIVATE raylib markup_raylib)
+if(TARGET raylib)
+    target_link_libraries(markup_demo_font PRIVATE raylib markup_raylib)
+endif()
 
+if(TARGET raylib)
 add_executable(demo_minimal apps/demo_minimal/main.c)
 target_link_libraries(demo_minimal PRIVATE
     markup_demo_font markup_widgets_basic markup_raylib markup_style markup_layout_flex
@@ -114,7 +140,7 @@ add_custom_command(TARGET demo_minimal POST_BUILD
 add_executable(demo_retheme apps/demo_retheme/main.c)
 target_link_libraries(demo_retheme PRIVATE
     markup_demo_font markup_widgets_basic markup_raylib markup_style markup_layout_flex
-    markup_input markup_core raylib
+    markup_input markup_core markup_paint raylib
 )
 set_target_properties(demo_retheme PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:demo_retheme>")
 add_custom_command(TARGET demo_retheme POST_BUILD
@@ -122,6 +148,78 @@ add_custom_command(TARGET demo_retheme POST_BUILD
     "${CMAKE_CURRENT_SOURCE_DIR}/apps/demo_minimal/assets"
     "$<TARGET_FILE_DIR:demo_retheme>/assets"
 )
+endif()
+
+if(MARKUP_WITH_SKIA)
+    enable_language(CXX)
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/markup/cmake")
+    include(FindSkia)
+    if(NOT MARKUP_SKIA_FOUND)
+        find_package(skia CONFIG REQUIRED)
+        set(MARKUP_SKIA_FOUND TRUE)
+        if(TARGET skia)
+            set(MARKUP_SKIA_LIBRARIES skia)
+        elseif(TARGET Skia::skia)
+            set(MARKUP_SKIA_LIBRARIES Skia::skia)
+        endif()
+    endif()
+
+    if(MARKUP_FETCH_SDL3)
+        include(FetchContent)
+        FetchContent_Declare(
+            SDL3
+            GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+            GIT_TAG release-3.2.8
+            GIT_SHALLOW TRUE
+        )
+        set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+        set(SDL_STATIC ON CACHE BOOL "" FORCE)
+        set(SDL_TEST OFF CACHE BOOL "" FORCE)
+        FetchContent_MakeAvailable(SDL3)
+    else()
+        find_package(SDL3 REQUIRED CONFIG)
+    endif()
+
+    if(TARGET SDL3::SDL3-static)
+        set(MARKUP_SDL3_LIB SDL3::SDL3-static)
+    else()
+        set(MARKUP_SDL3_LIB SDL3::SDL3)
+    endif()
+
+    add_library(markup_skia STATIC markup/src/mu_skia.cpp)
+    set_target_properties(markup_skia PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    target_link_libraries(markup_skia PUBLIC markup_core markup_input markup_paint ${MARKUP_SKIA_LIBRARIES})
+    target_include_directories(markup_skia PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/markup/include>
+    )
+
+    add_library(markup_sdl STATIC markup/src/mu_sdl.c)
+    target_link_libraries(markup_sdl PUBLIC markup_core markup_input markup_skia ${MARKUP_SDL3_LIB}
+        PRIVATE markup_widgets_basic)
+
+    add_library(markup::skia ALIAS markup_skia)
+    add_library(markup::sdl ALIAS markup_sdl)
+
+    add_library(markup_demo_font_skia STATIC apps/demo_font_skia.c)
+    target_include_directories(markup_demo_font_skia PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/apps>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+    )
+    target_link_libraries(markup_demo_font_skia PRIVATE markup_skia)
+
+    add_executable(demo_skia apps/demo_skia/main.c)
+    target_link_libraries(demo_skia PRIVATE
+        markup_compose markup_demo_font_skia markup_widgets_basic markup_sdl markup_skia
+        markup_style markup_layout_flex markup_input markup_core markup_paint
+        ${MARKUP_SKIA_LIBRARIES} ${MARKUP_SDL3_LIB}
+    )
+    set_target_properties(demo_skia PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:demo_skia>")
+    add_custom_command(TARGET demo_skia POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/apps/demo_minimal/assets"
+        "$<TARGET_FILE_DIR:demo_skia>/assets"
+    )
+endif()
 
 include(GNUInstallDirs)
 # install(EXPORT) on STATIC libs folds private deps (raylib) into the exported interface.

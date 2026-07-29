@@ -21,6 +21,18 @@ typedef struct MuKeyEvent {
     bool repeat;
 } MuKeyEvent;
 
+/** Backend-neutral key ids (values match Raylib KeyboardKey for the raylib bridge). */
+enum {
+    MU_KEY_UNKNOWN = 0,
+    MU_KEY_BACKSPACE = 259,
+    MU_KEY_TAB = 258,
+    MU_KEY_DELETE = 261,
+    MU_KEY_RIGHT = 262,
+    MU_KEY_LEFT = 263,
+    MU_KEY_HOME = 268,
+    MU_KEY_END = 269,
+};
+
 typedef struct MuTextEvent {
     unsigned int codepoint;
 } MuTextEvent;
@@ -30,6 +42,7 @@ void mu_modal_pop(MuContext *ctx);
 uint32_t mu_modal_top(const MuContext *ctx);
 
 void mu_input_clear_hovers(MuContext *ctx, MuNode *subtree);
+MuNode *mu_input_node_at(MuContext *ctx, MuVec2 position);
 void mu_input_update_hover(MuContext *ctx, MuVec2 mouse);
 void mu_input_dispatch_pointer(MuContext *ctx, const MuPointerEvent *ev);
 void mu_input_dispatch_key(MuContext *ctx, const MuKeyEvent *ev);

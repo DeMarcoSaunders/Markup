@@ -1,8 +1,8 @@
 # MarkUp UI v2
 
-**MarkUp v2** is a small UI layer for **C11 + [Raylib](https://www.raylib.com/)**. You describe a tree of **`MuNode` widgets**, run a **flexbox-style layout**, feed **pointer / keyboard** events from Raylib (or your own backend), and **paint** via a thin Renderer API. Split into static CMake libraries so you can link only what you need.
+**MarkUp v2** is a small UI layer for **C11** with pluggable render backends: **[Raylib](https://www.raylib.com/)** (default) or **Skia + SDL3** (desktop). You describe a tree of **`MuNode` widgets**, run **flexbox-style layout**, feed **pointer / keyboard** events, and **paint** via a thin renderer API. Libraries split so you link only what you need.
 
-Use it when you want a **native Raylib HUD**—settings panels, overlays, sliders, dialogs—without pulling in HTML or a heavyweight toolkit. Version 2 is a **focused rewrite**: fewer bundled controls than older experiments, but a cleaner extension model (**`MuNode` + `MuNodeOps`**). See **`apps/demo_minimal/main.c`** for a full working UI.
+Use it for **native HUDs and desktop-style shells**—settings panels, launchers, taskbars, dialogs—without HTML or a heavyweight toolkit. Version 2 is a **focused rewrite** with a clean extension model (**`MuNode` + `MuNodeOps`**). Start with **`apps/demo_minimal/main.c`** (Raylib) or **`apps/demo_skia/main.c`** (full component gallery).
 
 ---
 
@@ -20,9 +20,11 @@ add_subdirectory(third_party/markup) # path to upstream CMakeLists.txt
 add_executable(mygame main.c ...)
 target_include_directories(mygame PRIVATE third_party/markup/apps) # optional: only if you share demo_font helpers
 target_link_libraries(mygame PRIVATE
+    markup::compose          # optional — cards, icons, launcher helpers
     markup::widgets_basic
     markup::layout_flex
     markup::style
+    markup::paint
     markup::raylib
     markup::input
     markup::core
@@ -98,7 +100,7 @@ Roughly:
 3. Build once (or mutate) a **`panel`/`label`/`button`** tree; **`mu_context_set_root`**; optional **`mu_modal_bind_layer`**.
 4. Each frame (order matters):
 
-   **`mu_frame_begin`** → resize root **`bounds`** to the window → **`mu_layout_run`** → **`mu_raylib_frame`** → paint background → **`mu_paint_all`** → **`mu_frame_end`**.
+   **`mu_frame_begin`** → resize root **`bounds`** → **`mu_layout_run`** → **`mu_popups_sync`** (if using popups) → input bridge (**`mu_raylib_frame`** / **`mu_sdl_frame`**) → paint background → **`mu_paint_all`** → **`mu_frame_end`**.
 
 Concrete code mirrors this in **`apps/demo_minimal/main.c`**.
 
@@ -106,10 +108,11 @@ See [Getting started](#getting-started) for a copy-pasteable loop snippet.
 
 ---
 
-### Runtime: fonts & assets
+### Runtime: fonts, images & assets
 
-- Markup paints text with **`MuRenderContext::font`** (Raylib **`Font`**). Default is **`GetFontDefault()`** unless you **`mu_render_set_font`** (demo uses Inter from **`apps/demo_minimal/assets/`**).
-- If you load fonts or images from paths, distribute those files **next to your executable** (or fix working directory). CMake examples in this repo **`POST_BUILD` copy** **`assets`** into `bin/` for demos.
+- **Fonts:** Raylib uses **`Font`** via `mu_render_set_font`; Skia loads TTF with `mu_skia_set_font_file` / `mu_font_load_file`. Demos bundle **Inter** under **`apps/demo_minimal/assets/`**.
+- **Images:** `mu_image_load_file(&rc, path)` returns a texture id (`MU_IMAGE_INVALID` = 0). PNG decode uses **libpng** in `markup_paint` when CMake finds it (vcpkg Skia preset enables this). Supports atlas slices via `mu_image_set_src_rect` and `MuImageSheet` grid helpers.
+- **Paths:** load from **`assets/`** next to the executable. Demos **`POST_BUILD` copy** `apps/demo_minimal/assets/` into the output folder. Use absolute fallbacks in dev if cwd differs (see `MARKUP_DEMO_FONT_FILE_ABS` in Skia demo).
 
 ---
 
@@ -121,22 +124,53 @@ Treat each **`markup/src/*.c`** as normal C sources, **`markup/include`** as **`
 
 ## What’s in the box (v2)
 
-Bundled **`mu_widgets_basic`**: **`panel`** (flex row/column container), **`label`**, **`button`**, **`slider`**, **`checkbox`**, **`dropdown`**, **`textinput`**, **`modal`**, **`toast`**.
+### Widgets (`mu_widgets_basic`)
 
-**Demos**
+**`panel`**, **`label`**, **`button`**, **`slider`**, **`checkbox`**, **`dropdown`**, **`textinput`**, **`image`**, **`scroll`**, **`modal`**, **`toast`**.
 
-- **`demo_minimal`** — layout + widgets + modal + toast.
-- **`demo_retheme`** — two baked themes; swaps **`MuStyleModule`** without restructuring the UI tree.
+### Additional kinds (register explicitly)
 
-Optional CMake stubs (placeholders today): **`MARKUP_WITH_BLUR`**, **`MARKUP_WITH_STYLE_FILE`**, **`MARKUP_WITH_EXTRA_WIDGETS`**.
+| Module | Kind | Purpose |
+|--------|------|---------|
+| `mu_list` | list | Scrollable single-select list |
+| `mu_tabs` | tabs | Tab strip + one visible pane |
+| `mu_popup` | popup | Anchored overlay layer (dropdown menus use this) |
+
+Call `mu_list_register` / `mu_tabs_register` / `mu_popup_register` after `mu_widgets_basic_register` (list and tabs auto-register today). Dropdown requires a popup layer: `mu_make_popup_layer` + `mu_popup_bind_layer`.
+
+### Compose (`markup::compose`)
+
+High-level factories in **`markup/mu_compose.h`** — no new node kinds:
+
+- **`mu_compose_card`**, **`mu_compose_flow`**, **`mu_compose_scroll_column`**, **`mu_compose_list`**, **`mu_compose_tabs`**
+- **`MuIconDesc`** — parameterized icons for **`mu_compose_icon`**, **`mu_compose_icon_chip`**, **`mu_compose_icon_strip`** (taskbar), **`mu_compose_icon_carousel`**
+- **`mu_compose_app_tile`**, **`mu_compose_icon_label`** (wrappers around icon chip / row)
+
+**Agent skill:** [`.cursor/skills/markup-compose/SKILL.md`](.cursor/skills/markup-compose/SKILL.md) — patterns for AI agents.
+
+### Demos
+
+| Target | Backend | Highlights |
+|--------|---------|------------|
+| **`demo_skia`** | Skia + SDL3 | Full gallery: icons, taskbar, carousel, list, tabs, popup dropdown, themes |
+| **`demo_minimal`** | Raylib | Baseline loop, modal, toast |
+| **`demo_retheme`** | Raylib | Two themes via `MuStyleModule` swap |
+
+### Optional stubs (not implemented)
+
+**`MARKUP_WITH_BLUR`**, **`MARKUP_WITH_STYLE_FILE`**, **`MARKUP_WITH_EXTRA_WIDGETS`**.
+
+### Known gaps
+
+Multiline textinput, text selection, copy/paste, tree, tooltips, animations, SVG.
 
 ---
 
 ## Getting started
 
-1. **Build** the repo ([Build](#build)), then run **`demo_minimal`** from **the executable’s folder** so copied **`assets/`** is available.
-2. **Read** **`apps/demo_minimal/main.c`** end-to-end; it mirrors the checklist above (Raylib → context → widgets → modal → frame loop).
-3. Initialise Raylib (**`InitWindow`**, …) **before** **`mu_render_init`** / loading a bundled font pattern from the demos.
+1. **Build** the repo ([Build](#build)), then run **`demo_skia`** or **`demo_minimal`** from the **executable’s folder** so copied **`assets/`** is available.
+2. **Read** **`apps/demo_skia/main.c`** (gallery) or **`apps/demo_minimal/main.c`** (minimal Raylib loop).
+3. Initialise the window/backend before creating **`MuRenderContext`** and loading fonts/images.
 
 Minimal frame loop excerpt:
 
@@ -182,13 +216,68 @@ CloseWindow();
 | Library | Responsibility |
 |---------|----------------|
 | `markup::core` | `MuContext`, `MuNode` tree, node kind registry, arenas, modal stack hooks |
-| `markup::layout_flex` | `mu_layout_run` — assigns `MuNode.bounds` for flex containers and children |
-| `markup::style` | `MuStyleModule` tokens + `mu_style_resolve` from `MuNode.role` |
-| `markup::input` | Hover/focus/tab order, modal routing, pointer/key/text dispatch |
-| `markup::raylib` | `MuRenderContext`, `mu_draw_*`, `mu_paint_all`, `mu_raylib_frame` |
-| `markup::widgets_basic` | Built-in kinds (`panel`, `label`, `button`, …) and **`mu_make_*`** factories |
+| `markup::layout_flex` | `mu_layout_run` — flex layout, stretch, wrap, grow/shrink |
+| `markup::style` | `MuStyleModule` tokens, `mu_style_resolve` from `MuNode.role`, label word-wrap |
+| `markup::paint` | `mu_paint_all`, `mu_image_util`, PNG decode via libpng (`mu_image_decode_*`) |
+| `markup::input` | Hover/focus, modal routing, pointer/key/text dispatch |
+| `markup::compose` | `mu_compose_*`, `MuIconDesc` factories |
+| `markup::raylib` | Raylib `MuRenderContext`, `mu_draw_*`, `mu_raylib_frame` |
+| `markup::skia` + `markup::sdl` | Skia raster backend + SDL3 window/input (`MARKUP_WITH_SKIA`) |
+| `markup::widgets_basic` | Built-in widget kinds and **`mu_make_*`** factories |
 
 Each visible node uses a **`uint32_t` kind id** wired to **`MuNodeOps`** (measure / layout / paint / hit-test / input). Flex containers (**`MU_NODE_FLEX_CONTAINER`**) use **`mu_layout_flex`**.
+
+---
+
+## Composing UI (no custom widgets)
+
+Most screens are **trees of existing nodes**, not new `MuNodeOps` implementations.
+
+| Building block | Role |
+|----------------|------|
+| `panel` + flex | rows, columns, cards, toolbars, shell layout |
+| `mu_layout_set_flex(…, 1, 1, 0)` | fill available space (toolbar/body/taskbar pattern) |
+| `mu_panel_set_on_click` | clickable tile/shell |
+| `mu_compose_decorative` | children don’t steal pointer hits |
+| `mu_layout_set_flex_wrap` | wrapping icon grids (`mu_compose_flow`) |
+| `scroll` + `mu_scroll_content` | clipped viewport; wheel + scrollbar thumb drag |
+| `MuIconDesc` + compose | tiles, taskbar strip, carousel from one descriptor |
+| `mu_compose_list` | selectable scrollable list |
+| `mu_compose_tabs` + `mu_tabs_add` | tabbed panes (click or ←/→ when focused) |
+| popup layer | dropdown menus, anchored overlays |
+| `image` | PNG icons, atlas slices, fit modes |
+
+### Icon descriptor (tiles, taskbar, carousel)
+
+```c
+#include "markup/mu_compose.h"
+
+MuIconDesc d;
+mu_icon_desc_init(&d);
+d.image_id = mu_image_load_file(&rc, "assets/icon_files.png");
+d.label = "Files";
+d.size = 48.f;
+d.radius = 12.f;
+d.on_click = on_launch;
+d.user = userdata;
+
+MuNode *tile = mu_compose_icon_chip(ctx, &rc, &d);
+MuNode *dock = mu_compose_icon_strip(ctx, &rc, items, 4, 8.f);
+```
+
+Sprite sheet: `mu_image_sheet_load(&sheet, &rc, path, cell_w, cell_h, cols)` then `d.src = mu_image_sheet_cell(&sheet, i)`.
+
+### Launcher tile (shortcut)
+
+```c
+MuNode *tile = mu_compose_app_tile(ctx, icon_id, "Files", on_launch, user);
+```
+
+### Desktop shell layout (Skia demo)
+
+Root **column**: toolbar → body (`flex: 1`) → taskbar. Body **row** of `mu_compose_card` children with `flex: 1 1 0` and `align-items: stretch`. Labels wrap inside cards when width is bounded.
+
+Register a new node kind only when you need **new behavior** (e.g. drag-resize handles), not for layout patterns.
 
 ---
 
@@ -256,7 +345,22 @@ cmake --build build --config Release
 CMake options:
 
 - **`MARKUP_FETCH_RAYLIB`** (default ON) — Raylib 5.0 via FetchContent. OFF → **`find_package(raylib REQUIRED)`**.
+- **`MARKUP_WITH_SKIA`** (default OFF) — Skia + SDL3 backend and **`demo_skia`**. Uses vcpkg manifest (`skia` with PNG, `libpng`, `sdl3`).
+- **`MARKUP_FETCH_SDL3`** (default ON when Skia) — Fetch SDL3; OFF → **`find_package(SDL3)`**.
 - **`MARKUP_WITH_BLUR`**, **`MARKUP_WITH_STYLE_FILE`**, **`MARKUP_WITH_EXTRA_WIDGETS`** — optional stub libs.
+
+### Skia desktop (Windows)
+
+First-time setup (vcpkg; can take 30+ min):
+
+```powershell
+.\scripts\setup-vcpkg.ps1
+cmake --preset msvc-x64-skia
+cmake --build build-skia --config Release
+.\build-skia\Release\demo_skia.exe
+```
+
+Configure and build from **`build-skia`**, not the repo root. Assets copy to `build-skia/Release/assets/`.
 
 Install (local prefix):
 

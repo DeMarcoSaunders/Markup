@@ -1,9 +1,11 @@
 #ifndef MU_CORE_H
 #define MU_CORE_H
 
+#include "mu_layout.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "mu_text.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,6 +47,8 @@ typedef struct MuNodeOps {
     /* optional: custom layout; if NULL, layout module handles container nodes */
     void (*layout_children)(MuContext *ctx, MuNode *node);
     void (*paint)(MuContext *ctx, MuNode *node, MuRenderContext *render);
+    /** Optional pass after children (e.g. scrollbars above clipped content). */
+    void (*paint_overlay)(MuContext *ctx, MuNode *node, MuRenderContext *render);
     /* return true if node consumes hit */
     bool (*hit_test)(MuContext *ctx, MuNode *node, MuVec2 pt);
     bool (*on_pointer)(MuContext *ctx, MuNode *node, const void *event);
@@ -64,8 +68,8 @@ struct MuNode {
     uint32_t flags;
     const char *role;
     const char *class_name;
-    float flex_grow;
-    float flex_basis;
+    MuLayoutStyle layout;
+    MuTextStyle text;
     int z_index;
 };
 
@@ -77,6 +81,9 @@ struct MuNode {
 #define MU_NODE_FOCUSED (1u << 5)
 #define MU_NODE_HOVERED (1u << 8)
 #define MU_NODE_PRESSED (1u << 9)
+#define MU_NODE_LAYOUT_DIRTY (1u << 10)
+/** Pass pointer hits through to ancestors (for labels/icons inside clickable tiles). */
+#define MU_NODE_HIT_TRANSPARENT (1u << 11)
 
 struct MuContext {
     MuNode *root;
@@ -97,6 +104,9 @@ struct MuContext {
     int modal_cap;
     /* Optional full-screen overlay tree (not a flex child of root); paint after root */
     MuNode *modal_layer;
+    /* Floating popups (menus); paint after root, before modal */
+    MuNode *popup_layer;
+    uint32_t active_popup_id;
 
     uint64_t frame_index;
     MuError last_error;

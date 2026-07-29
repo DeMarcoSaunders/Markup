@@ -36,6 +36,8 @@ static MuNode *hit_dfs(MuContext *ctx, MuNode *n, MuVec2 pt) {
         if (h) return h;
     }
 
+    if (n->flags & MU_NODE_HIT_TRANSPARENT) return NULL;
+
     const MuNodeOps *ops = mu_get_node_ops(ctx, n->kind);
     if (ops && ops->hit_test) {
         if (!ops->hit_test(ctx, n, pt)) return NULL;
@@ -52,6 +54,10 @@ static MuNode *hit_tree(MuContext *ctx, MuVec2 pt) {
     if (mid) {
         MuNode *modal = mu_context_find_id(ctx, NULL, mid);
         if (modal) return hit_dfs(ctx, modal, pt);
+    }
+    if (ctx->popup_layer && (ctx->popup_layer->flags & MU_NODE_VISIBLE) && ctx->active_popup_id) {
+        MuNode *h = hit_dfs(ctx, ctx->popup_layer, pt);
+        if (h) return h;
     }
     if (!ctx->root) return NULL;
     return hit_dfs(ctx, ctx->root, pt);
@@ -71,6 +77,11 @@ void mu_input_clear_hovers(MuContext *ctx, MuNode *subtree) {
     for (int i = 0; i < n->child_count; i++) mu_input_clear_hovers(ctx, n->children[i]);
 }
 
+MuNode *mu_input_node_at(MuContext *ctx, MuVec2 position) {
+    if (!ctx) return NULL;
+    return hit_tree(ctx, position);
+}
+
 void mu_input_update_hover(MuContext *ctx, MuVec2 mouse) {
     if (!ctx) return;
     mu_input_clear_hovers(ctx, ctx->root);
@@ -82,6 +93,8 @@ void mu_input_update_hover(MuContext *ctx, MuVec2 mouse) {
 
 void mu_input_dispatch_pointer(MuContext *ctx, const MuPointerEvent *ev) {
     if (!ctx || !ev) return;
+    static uint32_t pressed_target_id = 0;
+
     if (ctx->captured_pointer_id) {
         MuNode *cap = mu_context_find_id(ctx, NULL, ctx->captured_pointer_id);
         if (cap) {
@@ -95,15 +108,23 @@ void mu_input_dispatch_pointer(MuContext *ctx, const MuPointerEvent *ev) {
     MuNode *under = hit_tree(ctx, ev->position);
     if (ev->drag) return;
 
-    if (ev->pressed && under) {
-        under->flags |= MU_NODE_PRESSED;
-        if (under->flags & MU_NODE_FOCUSABLE) mu_focus_set(ctx, under->id);
-        const MuNodeOps *ops = mu_get_node_ops(ctx, under->kind);
-        if (ops && ops->on_pointer) ops->on_pointer(ctx, under, ev);
-    } else if (ev->released && under) {
-        under->flags &= ~MU_NODE_PRESSED;
-        const MuNodeOps *ops = mu_get_node_ops(ctx, under->kind);
-        if (ops && ops->on_pointer) ops->on_pointer(ctx, under, ev);
+    if (ev->pressed) {
+        pressed_target_id = under ? under->id : 0;
+        if (under) {
+            under->flags |= MU_NODE_PRESSED;
+            if (under->flags & MU_NODE_FOCUSABLE) mu_focus_set(ctx, under->id);
+            const MuNodeOps *ops = mu_get_node_ops(ctx, under->kind);
+            if (ops && ops->on_pointer) ops->on_pointer(ctx, under, ev);
+        }
+    } else if (ev->released) {
+        MuNode *target = under;
+        if (!target && pressed_target_id) target = mu_context_find_id(ctx, NULL, pressed_target_id);
+        if (target) {
+            target->flags &= ~MU_NODE_PRESSED;
+            const MuNodeOps *ops = mu_get_node_ops(ctx, target->kind);
+            if (ops && ops->on_pointer) ops->on_pointer(ctx, target, ev);
+        }
+        pressed_target_id = 0;
     }
 }
 

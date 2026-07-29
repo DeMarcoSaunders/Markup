@@ -54,6 +54,9 @@ external/raylib-src/
 external/raylib-build/
 external/raylib-subbuild/
 
+# vcpkg bootstrap clone (has its own .git; keep vcpkg.json + scripts/setup-vcpkg.ps1 tracked)
+vcpkg/
+
 # ------------------------------------------------------------------------------
 # Compiled objects & binaries (global)
 # ------------------------------------------------------------------------------

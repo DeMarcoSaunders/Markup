@@ -1,6 +1,21 @@
 #include "../include/markup/mu_style.h"
+#include "../include/markup/mu_text.h"
 #include <stdlib.h>
 #include <string.h>
+
+static void resolve_text_defaults(const MuStyleModule *t, MuTextStyle *out) {
+    mu_text_style_init(out);
+    if (!t) {
+        out->size = 16.f;
+        out->weight = MU_TEXT_WEIGHT_NORMAL;
+        out->letter_spacing = 1.f;
+        return;
+    }
+    out->size = t->default_font_size;
+    out->weight = t->default_font_weight > 0 ? t->default_font_weight : MU_TEXT_WEIGHT_NORMAL;
+    out->italic = 0;
+    out->letter_spacing = t->default_letter_spacing >= 0.f ? t->default_letter_spacing : 1.f;
+}
 
 static void default_theme(MuStyleModule *m) {
     memset(m, 0, sizeof(*m));
@@ -27,6 +42,8 @@ static void default_theme(MuStyleModule *m) {
     m->modal_overlay = (MuColor){0, 0, 0, 160};
     m->modal_bg = (MuColor){255, 255, 255, 255};
     m->default_font_size = 16;
+    m->default_font_weight = MU_TEXT_WEIGHT_NORMAL;
+    m->default_letter_spacing = 1.f;
     m->default_radius = 6;
 }
 
@@ -60,11 +77,11 @@ void mu_style_resolve(MuContext *ctx, MuNode *node, MuStyleSnapshot *out) {
     if (!t) {
         out->background = (MuColor){255, 255, 255, 255};
         out->foreground = (MuColor){0, 0, 0, 255};
-        out->font_size = 16;
+        resolve_text_defaults(NULL, &out->text);
         return;
     }
 
-    out->font_size = t->default_font_size;
+    resolve_text_defaults(t, &out->text);
     out->radius_tl = out->radius_tr = out->radius_br = out->radius_bl = t->default_radius;
     out->border_width = 1;
 
@@ -81,7 +98,14 @@ void mu_style_resolve(MuContext *ctx, MuNode *node, MuStyleSnapshot *out) {
         out->foreground = t->muted_fg;
         out->background = (MuColor){0, 0, 0, 0};
         float fs = t->default_font_size - 1.f;
-        out->font_size = fs < 11.f ? 11.f : fs;
+        out->text.size = fs < 11.f ? 11.f : fs;
+    } else if (strcmp(r, "heading") == 0) {
+        out->foreground = t->label_fg;
+        out->background = (MuColor){0, 0, 0, 0};
+        out->text.size = t->default_font_size + 5.f;
+        out->text.weight = MU_TEXT_WEIGHT_BOLD;
+    } else if (strcmp(r, "group") == 0) {
+        out->background = (MuColor){0, 0, 0, 0};
     } else if (strcmp(r, "panel") == 0) {
         out->background = t->panel_bg;
         out->border = t->panel_border;
@@ -121,8 +145,63 @@ void mu_style_resolve(MuContext *ctx, MuNode *node, MuStyleSnapshot *out) {
     } else if (strcmp(r, "toast") == 0) {
         out->background = (MuColor){31, 41, 55, 240};
         out->foreground = (MuColor){255, 255, 255, 255};
+    } else if (strcmp(r, "image") == 0) {
+        out->background = (MuColor){0, 0, 0, 0};
+        out->border = t->panel_border;
+    } else if (strcmp(r, "tile") == 0) {
+        out->background = t->panel_bg;
+        out->border = t->panel_border;
+        if (node->flags & MU_NODE_HOVERED) {
+            out->background.r = (unsigned char)(out->background.r + 12 > 255 ? 255 : out->background.r + 12);
+            out->background.g = (unsigned char)(out->background.g + 12 > 255 ? 255 : out->background.g + 12);
+            out->background.b = (unsigned char)(out->background.b + 12 > 255 ? 255 : out->background.b + 12);
+        }
+        if (node->flags & MU_NODE_PRESSED) {
+            out->background.r = (unsigned char)(out->background.r > 16 ? out->background.r - 16 : 0);
+            out->background.g = (unsigned char)(out->background.g > 16 ? out->background.g - 16 : 0);
+            out->background.b = (unsigned char)(out->background.b > 16 ? out->background.b - 16 : 0);
+        }
+    } else if (strcmp(r, "scroll") == 0) {
+        out->background = t->input_bg;
+        out->border = t->panel_border;
+        out->foreground = t->slider_thumb;
+    } else if (strcmp(r, "tabs") == 0) {
+        out->background = t->panel_bg;
+        out->border = t->panel_border;
+    } else if (strcmp(r, "tab") == 0) {
+        out->background = (MuColor){0, 0, 0, 0};
+        out->foreground = t->muted_fg;
+        if (node->flags & MU_NODE_HOVERED) {
+            out->foreground = t->label_fg;
+            out->background = t->button_bg_hover;
+            out->background.a = 48;
+        }
+    } else if (strcmp(r, "tab-selected") == 0) {
+        out->background = t->input_bg;
+        out->foreground = t->label_fg;
+        if (node->flags & MU_NODE_HOVERED) {
+            out->background = t->button_bg_hover;
+            out->background.a = 72;
+        }
+    } else if (strcmp(r, "listitem") == 0) {
+        out->background = (MuColor){0, 0, 0, 0};
+        out->foreground = t->label_fg;
+        if (node->flags & MU_NODE_HOVERED) {
+            out->background = t->button_bg_hover;
+            out->background.a = 40;
+        }
+    } else if (strcmp(r, "listitem-selected") == 0) {
+        out->background = t->button_bg;
+        out->background.a = 56;
+        out->foreground = t->label_fg;
+        if (node->flags & MU_NODE_HOVERED) {
+            out->background = t->button_bg_hover;
+            out->background.a = 72;
+        }
     } else {
         out->background = t->panel_bg;
         out->foreground = t->label_fg;
     }
+
+    mu_text_style_merge(&out->text, &node->text);
 }

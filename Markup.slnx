@@ -14,6 +14,7 @@
 		<BuildDependency Project="markup_demo_font.vcxproj"/>
 		<BuildDependency Project="markup_input.vcxproj"/>
 		<BuildDependency Project="markup_layout_flex.vcxproj"/>
+		<BuildDependency Project="markup_paint.vcxproj"/>
 		<BuildDependency Project="markup_raylib.vcxproj"/>
 		<BuildDependency Project="markup_style.vcxproj"/>
 		<BuildDependency Project="markup_widgets_basic.vcxproj"/>
@@ -26,10 +27,19 @@
 		<BuildDependency Project="markup_demo_font.vcxproj"/>
 		<BuildDependency Project="markup_input.vcxproj"/>
 		<BuildDependency Project="markup_layout_flex.vcxproj"/>
+		<BuildDependency Project="markup_paint.vcxproj"/>
 		<BuildDependency Project="markup_raylib.vcxproj"/>
 		<BuildDependency Project="markup_style.vcxproj"/>
 		<BuildDependency Project="markup_widgets_basic.vcxproj"/>
 		<BuildDependency Project="_deps/raylib-build/raylib/raylib.vcxproj"/>
+	</Project>
+	<Project Path="markup_compose.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="9884b2db-9dc3-3195-9363-d2bc0b25a2d8">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="markup_core.vcxproj"/>
+		<BuildDependency Project="markup_layout_flex.vcxproj"/>
+		<BuildDependency Project="markup_paint.vcxproj"/>
+		<BuildDependency Project="markup_style.vcxproj"/>
+		<BuildDependency Project="markup_widgets_basic.vcxproj"/>
 	</Project>
 	<Project Path="markup_core.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="85adbf90-8b86-32fe-a73c-19d4d53c218f">
 		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
@@ -39,7 +49,11 @@
 		<BuildDependency Project="_deps/raylib-build/raylib/external/glfw/src/glfw.vcxproj"/>
 		<BuildDependency Project="markup_core.vcxproj"/>
 		<BuildDependency Project="markup_input.vcxproj"/>
+		<BuildDependency Project="markup_layout_flex.vcxproj"/>
+		<BuildDependency Project="markup_paint.vcxproj"/>
 		<BuildDependency Project="markup_raylib.vcxproj"/>
+		<BuildDependency Project="markup_style.vcxproj"/>
+		<BuildDependency Project="markup_widgets_basic.vcxproj"/>
 		<BuildDependency Project="_deps/raylib-build/raylib/raylib.vcxproj"/>
 	</Project>
 	<Project Path="markup_input.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="d8db38ad-32f9-350c-a21c-b50ffd78e781">
@@ -50,11 +64,19 @@
 		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
 		<BuildDependency Project="markup_core.vcxproj"/>
 	</Project>
+	<Project Path="markup_paint.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="d227474c-e713-3fa2-9bbd-50637a782db2">
+		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
+		<BuildDependency Project="markup_core.vcxproj"/>
+	</Project>
 	<Project Path="markup_raylib.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="de7455d5-2a25-349a-a207-2d78599a0431">
 		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
 		<BuildDependency Project="_deps/raylib-build/raylib/external/glfw/src/glfw.vcxproj"/>
 		<BuildDependency Project="markup_core.vcxproj"/>
 		<BuildDependency Project="markup_input.vcxproj"/>
+		<BuildDependency Project="markup_layout_flex.vcxproj"/>
+		<BuildDependency Project="markup_paint.vcxproj"/>
+		<BuildDependency Project="markup_style.vcxproj"/>
+		<BuildDependency Project="markup_widgets_basic.vcxproj"/>
 		<BuildDependency Project="_deps/raylib-build/raylib/raylib.vcxproj"/>
 	</Project>
 	<Project Path="markup_style.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="8a2829eb-bb5f-3f5b-96e4-18e8d943e0ab">
@@ -63,13 +85,10 @@
 	</Project>
 	<Project Path="markup_widgets_basic.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="d9707d36-df0a-3f5b-8c01-8942d5ae52c8">
 		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
-		<BuildDependency Project="_deps/raylib-build/raylib/external/glfw/src/glfw.vcxproj"/>
 		<BuildDependency Project="markup_core.vcxproj"/>
-		<BuildDependency Project="markup_input.vcxproj"/>
 		<BuildDependency Project="markup_layout_flex.vcxproj"/>
-		<BuildDependency Project="markup_raylib.vcxproj"/>
+		<BuildDependency Project="markup_paint.vcxproj"/>
 		<BuildDependency Project="markup_style.vcxproj"/>
-		<BuildDependency Project="_deps/raylib-build/raylib/raylib.vcxproj"/>
 	</Project>
 	<Project Path="_deps/raylib-build/raylib/raylib.vcxproj" Type="8bc9ceb8-8b4a-11d0-8d11-00a0c91bc942" Id="5293cc17-1207-3c7f-8959-e2ea9ab2afa8">
 		<BuildDependency Project="ZERO_CHECK.vcxproj"/>
@@ -88,10 +107,12 @@
 			<BuildDependency Project="demo_minimal.vcxproj"/>
 			<BuildDependency Project="demo_retheme.vcxproj"/>
 			<BuildDependency Project="_deps/raylib-build/raylib/external/glfw/src/glfw.vcxproj"/>
+			<BuildDependency Project="markup_compose.vcxproj"/>
 			<BuildDependency Project="markup_core.vcxproj"/>
 			<BuildDependency Project="markup_demo_font.vcxproj"/>
 			<BuildDependency Project="markup_input.vcxproj"/>
 			<BuildDependency Project="markup_layout_flex.vcxproj"/>
+			<BuildDependency Project="markup_paint.vcxproj"/>
 			<BuildDependency Project="markup_raylib.vcxproj"/>
 			<BuildDependency Project="markup_style.vcxproj"/>
 			<BuildDependency Project="markup_widgets_basic.vcxproj"/>

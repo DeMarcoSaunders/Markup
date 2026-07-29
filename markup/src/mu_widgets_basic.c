@@ -1,9 +1,12 @@
 #include "../include/markup/mu_widgets_basic.h"
+#include "../include/markup/mu_popup.h"
+#include "../include/markup/mu_image.h"
 #include "../include/markup/mu_layout_flex.h"
 #include "../include/markup/mu_style.h"
-#include "../include/markup/mu_raylib.h"
+#include "../include/markup/mu_render.h"
 #include "../include/markup/mu_input.h"
-#include <raylib.h>
+#include "../include/markup/mu_popup.h"
+#include "../include/markup/mu_compose.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -15,18 +18,21 @@ static char *dup_cstr(const char *s) {
     return p;
 }
 
+static bool widget_pt_in(MuNode *node, MuVec2 pt) {
+    return pt.x >= node->bounds.x && pt.x < node->bounds.x + node->bounds.w && pt.y >= node->bounds.y &&
+           pt.y < node->bounds.y + node->bounds.h;
+}
+
 typedef struct MuWidgetsBasicKindIds {
-    uint32_t panel, label, button, slider, check, dropdown, text, modal, toast;
+    uint32_t panel, label, button, slider, check, dropdown, text, modal, toast, image, scroll;
 } MuWidgetsBasicKindIds;
+
+extern const MuNodeOps mu_scroll_node_ops;
 
 static const MuWidgetsBasicKindIds *wb_kinds(const MuContext *ctx) {
     if (!ctx) return NULL;
     return (const MuWidgetsBasicKindIds *)ctx->widgets_basic_kinds;
 }
-
-typedef struct MuPanelState {
-    MuFlexLayoutState flex;
-} MuPanelState;
 
 typedef struct MuLabelState {
     char *text;
@@ -52,12 +58,13 @@ typedef struct MuDropdownState {
     char items[16][64];
     int n;
     int sel;
+    MuNode *popup;
+    struct {
+        MuContext *ctx;
+        MuNode *dropdown;
+        int index;
+    } picks[16];
 } MuDropdownState;
-
-typedef struct MuTextInState {
-    char buf[256];
-    int len;
-} MuTextInState;
 
 typedef struct MuModalState {
     bool visible;
@@ -67,6 +74,21 @@ typedef struct MuToastState {
     char msg[128];
 } MuToastState;
 
+typedef struct MuImageState {
+    uint32_t image_id;
+    MuImageFit fit;
+    MuColor tint;
+    float radius;
+    MuRect src;
+    float intrinsic_w;
+    float intrinsic_h;
+} MuImageState;
+
+typedef struct MuPanelState {
+    void (*on_click)(void *);
+    void *user;
+} MuPanelState;
+
 /* --- Panel --- */
 static void panel_destroy(MuContext *ctx, MuNode *node) {
     (void)ctx;
@@ -75,27 +97,12 @@ static void panel_destroy(MuContext *ctx, MuNode *node) {
 }
 
 static void panel_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) {
-    MuPanelState *ps = (MuPanelState *)node->state;
-    MuFlexLayoutState *fl = &ps->flex;
-    float mw = 20, mh = 20;
-    for (int i = 0; i < node->child_count; i++) {
-        MuNode *ch = node->children[i];
-        if (!(ch->flags & MU_NODE_VISIBLE)) continue;
-        MuVec2 d = {40, 24};
-        const MuNodeOps *ops = mu_get_node_ops(ctx, ch->kind);
-        if (ops && ops->measure) ops->measure(ctx, ch, avail, &d);
-        if (fl->direction == MU_FLEX_ROW) {
-            mw += d.x + fl->gap;
-            if (d.y > mh) mh = d.y;
-        } else {
-            mh += d.y + fl->gap;
-            if (d.x > mw) mw = d.x;
-        }
+    if (node->flags & MU_NODE_FLEX_CONTAINER)
+        mu_layout_measure_container(ctx, node, avail, out);
+    else {
+        out->x = 20.f;
+        out->y = 20.f;
     }
-    mw += fl->pad_left + fl->pad_right;
-    mh += fl->pad_top + fl->pad_bottom;
-    out->x = mw;
-    out->y = mh;
 }
 
 static void panel_layout(MuContext *ctx, MuNode *node) {
@@ -106,15 +113,33 @@ static void panel_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     float rad = (st.radius_tl + st.radius_tr + st.radius_br + st.radius_bl) * 0.25f;
-    mu_draw_rect(rc, node->bounds, st.background, st.border, st.border_width, rad);
+    if (st.background.a > 0)
+        mu_draw_rect(rc, node->bounds, st.background, (MuColor){0, 0, 0, 0}, 0.f, rad);
+    if (st.border.a > 0 && st.border_width > 0.f)
+        mu_draw_rect(rc, node->bounds, (MuColor){0, 0, 0, 0}, st.border, st.border_width, rad);
+}
+
+static bool panel_hit(MuContext *ctx, MuNode *node, MuVec2 pt) {
+    MuPanelState *s = (MuPanelState *)node->state;
+    if (!s || !s->on_click) return false;
+    (void)ctx;
+    return widget_pt_in(node, pt);
+}
+
+static bool panel_ptr(MuContext *ctx, MuNode *node, const void *evp) {
+    const MuPointerEvent *ev = (const MuPointerEvent *)evp;
+    MuPanelState *s = (MuPanelState *)node->state;
+    if (!s || !s->on_click) return false;
+    if (ev->released && widget_pt_in(node, ev->position)) s->on_click(s->user);
+    return true;
 }
 
 static const MuNodeOps panel_ops = {.destroy_state = panel_destroy,
                                     .measure = panel_measure,
                                     .layout_children = panel_layout,
                                     .paint = panel_paint,
-                                    .hit_test = NULL,
-                                    .on_pointer = NULL,
+                                    .hit_test = panel_hit,
+                                    .on_pointer = panel_ptr,
                                     .on_key = NULL,
                                     .on_char = NULL};
 
@@ -130,15 +155,21 @@ static void label_destroy(MuContext *ctx, MuNode *node) {
 }
 
 static void label_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) {
-    (void)avail;
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     MuLabelState *s = (MuLabelState *)node->state;
     const char *t = s && s->text ? s->text : "";
-    Font f = mu_raylib_ui_font();
-    Vector2 sz = MeasureTextEx(f, t, st.font_size, 1.0f);
-    out->x = sz.x + 4;
-    out->y = sz.y + 4;
+    MuTextMetrics tm;
+    float wrap_w = avail.x > 0.f ? avail.x - 4.f : 0.f;
+    if (node->layout.max_width > 0.f && (wrap_w <= 0.f || node->layout.max_width < wrap_w))
+        wrap_w = node->layout.max_width - 4.f;
+    if (wrap_w > 8.f)
+        mu_text_measure_wrapped(NULL, t, &st.text, wrap_w, &tm);
+    else
+        mu_text_measure(NULL, t, &st.text, &tm);
+    out->x = tm.width + 4.f;
+    out->y = tm.height + 4.f;
+    if (avail.x > 0.f && out->x > avail.x) out->x = avail.x;
 }
 
 static void label_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
@@ -146,7 +177,9 @@ static void label_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     mu_style_resolve(ctx, node, &st);
     MuLabelState *s = (MuLabelState *)node->state;
     const char *t = s && s->text ? s->text : "";
-    mu_draw_text(rc, t, node->bounds.x + 2, node->bounds.y + 2, st.font_size, st.foreground);
+    mu_push_scissor(rc, node->bounds);
+    mu_draw_text_wrapped(rc, t, node->bounds, &st.text, st.foreground);
+    mu_pop_scissor(rc);
 }
 
 static const MuNodeOps label_ops = {.destroy_state = label_destroy,
@@ -175,10 +208,10 @@ static void btn_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out)
     mu_style_resolve(ctx, node, &st);
     MuButtonState *s = (MuButtonState *)node->state;
     const char *t = s && s->text ? s->text : "Btn";
-    Font f = mu_raylib_ui_font();
-    Vector2 sz = MeasureTextEx(f, t, st.font_size, 1.0f);
-    out->x = sz.x + 24;
-    out->y = sz.y + 16;
+    MuTextMetrics tm;
+    mu_text_measure(NULL, t, &st.text, &tm);
+    out->x = tm.width + 24;
+    out->y = tm.height + 16;
 }
 
 static bool btn_pt_in(MuContext *ctx, MuNode *node, MuVec2 pt) {
@@ -204,11 +237,11 @@ static void btn_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     mu_draw_rect(rc, node->bounds, st.background, st.border, st.border_width, rad);
     MuButtonState *s = (MuButtonState *)node->state;
     const char *t = s && s->text ? s->text : "";
-    Font f = mu_raylib_ui_font();
-    Vector2 sz = MeasureTextEx(f, t, st.font_size, 1.0f);
-    float tx = node->bounds.x + (node->bounds.w - sz.x) * 0.5f;
-    float ty = node->bounds.y + (node->bounds.h - sz.y) * 0.5f;
-    mu_draw_text(rc, t, tx, ty, st.font_size, st.foreground);
+    MuTextMetrics tm;
+    mu_text_measure(rc, t, &st.text, &tm);
+    float tx = node->bounds.x + (node->bounds.w - tm.width) * 0.5f;
+    float ty = node->bounds.y + (node->bounds.h - tm.height) * 0.5f;
+    mu_draw_text(rc, t, tx, ty, &st.text, st.foreground);
 }
 
 static const MuNodeOps button_ops = {.destroy_state = btn_destroy,
@@ -230,9 +263,8 @@ static void slider_destroy(MuContext *ctx, MuNode *node) {
 static void slider_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) {
     (void)ctx;
     (void)node;
-    (void)avail;
-    out->x = 200;
-    out->y = 24;
+    out->x = avail.x > 0.f ? avail.x : 280.f;
+    out->y = 28.f;
 }
 
 static bool slider_ptr(MuContext *ctx, MuNode *node, const void *evp) {
@@ -324,41 +356,103 @@ static const MuNodeOps checkbox_ops = {.destroy_state = cb_destroy,
                                         .on_key = NULL,
                                         .on_char = NULL};
 
-/* --- Dropdown (cycle on click) --- */
+/* --- Dropdown (popup menu) --- */
+static void dropdown_pick(void *user) {
+    struct {
+        MuContext *ctx;
+        MuNode *dropdown;
+        int index;
+    } *u = user;
+    if (!u || !u->ctx || !u->dropdown) return;
+    MuDropdownState *s = (MuDropdownState *)u->dropdown->state;
+    if (!s) return;
+    if (u->index >= 0 && u->index < s->n) {
+        s->sel = u->index;
+        mu_layout_mark_dirty(u->dropdown);
+    }
+    if (s->popup) mu_popup_close(u->ctx, s->popup);
+}
+
+static void dropdown_clear_menu(MuContext *ctx, MuDropdownState *s) {
+    if (!ctx || !s || !s->popup) return;
+    MuNode *content = mu_popup_content(s->popup);
+    if (!content) return;
+    while (content->child_count > 0) {
+        MuNode *ch = content->children[0];
+        mu_node_remove_child(ctx, content, ch);
+        mu_node_destroy_recursive(ctx, ch);
+    }
+}
+
+static void dropdown_rebuild_menu(MuContext *ctx, MuNode *dd) {
+    MuDropdownState *s = (MuDropdownState *)dd->state;
+    if (!ctx || !s || !s->popup) return;
+    MuNode *content = mu_popup_content(s->popup);
+    if (!content) return;
+
+    dropdown_clear_menu(ctx, s);
+    for (int i = 0; i < s->n; i++) {
+        s->picks[i].ctx = ctx;
+        s->picks[i].dropdown = dd;
+        s->picks[i].index = i;
+
+        MuNode *row = mu_make_panel(ctx, false);
+        row->role = "group";
+        mu_layout_set_padding(row, 8.f, 12.f, 8.f, 12.f);
+        mu_layout_set_gap(row, 0.f);
+        mu_panel_set_on_click(row, dropdown_pick, &s->picks[i]);
+
+        MuNode *lbl = mu_make_label(ctx, s->items[i]);
+        if (i == s->sel) mu_node_set_text_weight(lbl, 600);
+        mu_node_set_hit_transparent(lbl, true);
+        mu_node_add_child(ctx, row, lbl);
+        mu_node_add_child(ctx, content, row);
+    }
+    mu_layout_mark_dirty(s->popup);
+}
+
 static void dd_destroy(MuContext *ctx, MuNode *node) {
+    MuDropdownState *s = (MuDropdownState *)node->state;
+    if (s && s->popup) mu_popup_close(ctx, s->popup);
     (void)ctx;
     free(node->state);
     node->state = NULL;
 }
 
 static void dd_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) {
-    (void)avail;
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     MuDropdownState *s = (MuDropdownState *)node->state;
-    Font f = mu_raylib_ui_font();
-    float maxw = 80;
+    float min_w = 120.f;
     if (s) {
         for (int i = 0; i < s->n; i++) {
-            Vector2 sz = MeasureTextEx(f, s->items[i], st.font_size, 1.0f);
-            if (sz.x + 40 > maxw) maxw = sz.x + 40;
+            MuTextMetrics tm;
+            mu_text_measure(NULL, s->items[i], &st.text, &tm);
+            if (tm.width + 56.f > min_w) min_w = tm.width + 56.f;
         }
     }
-    out->x = maxw;
-    out->y = 36;
+    out->x = avail.x > min_w ? avail.x : min_w;
+    out->y = 38.f;
 }
 
 static bool dd_ptr(MuContext *ctx, MuNode *node, const void *evp) {
     const MuPointerEvent *ev = (const MuPointerEvent *)evp;
     MuDropdownState *s = (MuDropdownState *)node->state;
-    if (!s || s->n <= 0) return false;
-    if (ev->released) {
-        float mx = ev->position.x, my = ev->position.y;
-        if (mx >= node->bounds.x && mx < node->bounds.x + node->bounds.w && my >= node->bounds.y &&
-            my < node->bounds.y + node->bounds.h)
-            s->sel = (s->sel + 1) % s->n;
+    if (!s || s->n <= 0 || !widget_pt_in(node, ev->position)) return false;
+    if (ev->pressed) {
+        if (!s->popup && ctx->popup_layer) {
+            s->popup = mu_make_popup(ctx);
+            if (s->popup) {
+                mu_popup_set_anchor(s->popup, node);
+                mu_popup_set_placement(s->popup, MU_POPUP_AUTO);
+            }
+        }
+        if (s->popup) {
+            dropdown_rebuild_menu(ctx, node);
+            mu_popup_set_anchor(s->popup, node);
+            mu_popup_toggle(ctx, s->popup);
+        }
     }
-    (void)ctx;
     return true;
 }
 
@@ -366,9 +460,20 @@ static void dd_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     MuDropdownState *s = (MuDropdownState *)node->state;
-    mu_draw_rect(rc, node->bounds, st.background, st.border, 1, st.radius_tl);
-    const char *t = (s && s->n > 0) ? s->items[s->sel] : "";
-    mu_draw_text(rc, t, node->bounds.x + 8, node->bounds.y + 8, st.font_size, st.foreground);
+    MuColor border = st.border;
+    float border_w = 1.f;
+    if (node->flags & MU_NODE_HOVERED) {
+        border = st.foreground;
+        border_w = 2.f;
+    }
+    mu_draw_rect(rc, node->bounds, st.background, border, border_w, 6.f);
+    const char *t = (s && s->n > 0) ? s->items[s->sel] : "Select…";
+    MuTextMetrics tm;
+    mu_text_measure(rc, t, &st.text, &tm);
+    float ty = node->bounds.y + (node->bounds.h - tm.height) * 0.5f;
+    mu_draw_text(rc, t, node->bounds.x + 10.f, ty, &st.text, st.foreground);
+    MuColor chevron = ctx->style ? ctx->style->muted_fg : (MuColor){140, 150, 170, 255};
+    mu_draw_text(rc, "v", node->bounds.x + node->bounds.w - 18.f, ty, &st.text, chevron);
 }
 
 static const MuNodeOps dropdown_ops = {.destroy_state = dd_destroy,
@@ -380,66 +485,7 @@ static const MuNodeOps dropdown_ops = {.destroy_state = dd_destroy,
                                         .on_key = NULL,
                                         .on_char = NULL};
 
-/* --- Text input --- */
-static void ti_destroy(MuContext *ctx, MuNode *node) {
-    (void)ctx;
-    free(node->state);
-    node->state = NULL;
-}
-
-static void ti_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) {
-    (void)ctx;
-    (void)node;
-    (void)avail;
-    out->x = 180;
-    out->y = 32;
-}
-
-static bool ti_ptr(MuContext *ctx, MuNode *node, const void *evp) {
-    const MuPointerEvent *ev = (const MuPointerEvent *)evp;
-    if (ev->pressed) mu_focus_set(ctx, node->id);
-    return true;
-}
-
-static bool ti_key(MuContext *ctx, MuNode *node, const void *evp) {
-    const MuKeyEvent *ev = (const MuKeyEvent *)evp;
-    MuTextInState *s = (MuTextInState *)node->state;
-    if (!s) return false;
-    if (ev->key == KEY_BACKSPACE && s->len > 0) {
-        s->buf[--s->len] = '\0';
-        return true;
-    }
-    (void)ctx;
-    return false;
-}
-
-static bool ti_char(MuContext *ctx, MuNode *n, unsigned int cp) {
-    MuTextInState *s = (MuTextInState *)n->state;
-    if (!s) return false;
-    if (cp >= 32u && cp < 127u && s->len < 255) {
-        s->buf[s->len++] = (char)cp;
-        s->buf[s->len] = '\0';
-    }
-    (void)ctx;
-    return true;
-}
-
-static void ti_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
-    MuStyleSnapshot st;
-    mu_style_resolve(ctx, node, &st);
-    mu_draw_rect(rc, node->bounds, st.background, st.border, 1, 4);
-    MuTextInState *s = (MuTextInState *)node->state;
-    mu_draw_text(rc, s ? s->buf : "", node->bounds.x + 6, node->bounds.y + 7, st.font_size, st.foreground);
-}
-
-static const MuNodeOps textinput_ops = {.destroy_state = ti_destroy,
-                                         .measure = ti_measure,
-                                         .layout_children = NULL,
-                                         .paint = ti_paint,
-                                         .hit_test = NULL,
-                                         .on_pointer = ti_ptr,
-                                         .on_key = ti_key,
-                                         .on_char = ti_char};
+extern const MuNodeOps mu_textinput_node_ops;
 
 /* --- Modal --- */
 static void modal_destroy(MuContext *ctx, MuNode *node) {
@@ -458,12 +504,7 @@ static void modal_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *ou
 static void modal_layout(MuContext *ctx, MuNode *node) {
     MuModalState *m = (MuModalState *)node->state;
     if (!m || !m->visible) return;
-    for (int i = 0; i < node->child_count; i++) {
-        MuNode *ch = node->children[i];
-        const MuNodeOps *ops = mu_get_node_ops(ctx, ch->kind);
-        if (ops && ops->layout_children) ops->layout_children(ctx, ch);
-        else if (ch->flags & MU_NODE_FLEX_CONTAINER) mu_layout_flex_run(ctx, ch);
-    }
+    for (int i = 0; i < node->child_count; i++) mu_layout_node(ctx, node->children[i]);
 }
 
 static void modal_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
@@ -499,11 +540,11 @@ static void toast_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *ou
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     const char *t = s && s->msg[0] ? s->msg : "";
-    Font f = mu_raylib_ui_font();
-    Vector2 sz = MeasureTextEx(f, t, st.font_size, 1.0f);
+    MuTextMetrics tm;
+    mu_text_measure(NULL, t, &st.text, &tm);
     (void)avail;
-    out->x = sz.x + 20;
-    out->y = sz.y + 16;
+    out->x = tm.width + 20;
+    out->y = tm.height + 16;
 }
 
 static void toast_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
@@ -511,7 +552,7 @@ static void toast_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     mu_style_resolve(ctx, node, &st);
     MuToastState *s = (MuToastState *)node->state;
     mu_draw_rect(rc, node->bounds, st.background, st.background, 0, st.radius_tl);
-    mu_draw_text(rc, s ? s->msg : "", node->bounds.x + 10, node->bounds.y + 8, st.font_size, st.foreground);
+    mu_draw_text(rc, s ? s->msg : "", node->bounds.x + 10, node->bounds.y + 8, &st.text, st.foreground);
 }
 
 static const MuNodeOps toast_ops = {.destroy_state = toast_destroy,
@@ -522,6 +563,74 @@ static const MuNodeOps toast_ops = {.destroy_state = toast_destroy,
                                      .on_pointer = NULL,
                                      .on_key = NULL,
                                      .on_char = NULL};
+
+/* --- Image --- */
+static void image_destroy(MuContext *ctx, MuNode *node) {
+    (void)ctx;
+    free(node->state);
+    node->state = NULL;
+}
+
+static void image_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) {
+    (void)ctx;
+    MuImageState *s = (MuImageState *)node->state;
+    float w = 64.f, h = 64.f;
+    if (s) {
+        if (s->intrinsic_w > 0.f && s->intrinsic_h > 0.f) {
+            w = s->intrinsic_w;
+            h = s->intrinsic_h;
+        } else if (s->image_id != MU_IMAGE_INVALID) {
+            float iw = 0.f, ih = 0.f;
+            if (mu_image_get_size(NULL, s->image_id, &iw, &ih) && iw > 0.f && ih > 0.f) {
+                MuRect resolved;
+                if (mu_image_resolve_src(&s->src, iw, ih, &resolved)) {
+                    w = resolved.w;
+                    h = resolved.h;
+                } else {
+                    w = iw;
+                    h = ih;
+                }
+            }
+        }
+    }
+    const MuLayoutStyle *fl = &node->layout;
+    if (fl->min_width > 0.f) w = fl->min_width;
+    if (fl->min_height > 0.f) h = fl->min_height;
+    if (fl->max_width > 0.f && w > fl->max_width) w = fl->max_width;
+    if (fl->max_height > 0.f && h > fl->max_height) h = fl->max_height;
+    if (avail.x > 0.f && w > avail.x) w = avail.x;
+    if (avail.y > 0.f && h > avail.y) h = avail.y;
+    out->x = w;
+    out->y = h;
+}
+
+static void image_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
+    MuImageState *s = (MuImageState *)node->state;
+    if (!s || s->image_id == MU_IMAGE_INVALID) {
+        MuStyleSnapshot st;
+        mu_style_resolve(ctx, node, &st);
+        mu_draw_rect(rc, node->bounds, (MuColor){st.foreground.r, st.foreground.g, st.foreground.b, 40},
+                     st.border, 1.f, s ? s->radius : 4.f);
+        return;
+    }
+
+    MuDrawImageOpts opts;
+    mu_draw_image_opts_init(&opts);
+    opts.fit = s->fit;
+    opts.tint = s->tint;
+    opts.radius = s->radius;
+    opts.src = s->src;
+    mu_draw_image(rc, s->image_id, node->bounds, &opts);
+}
+
+static const MuNodeOps image_ops = {.destroy_state = image_destroy,
+                                    .measure = image_measure,
+                                    .layout_children = NULL,
+                                    .paint = image_paint,
+                                    .hit_test = NULL,
+                                    .on_pointer = NULL,
+                                    .on_key = NULL,
+                                    .on_char = NULL};
 
 void mu_widgets_basic_register(MuContext *ctx) {
     if (!ctx || ctx->widgets_basic_kinds)
@@ -535,10 +644,15 @@ void mu_widgets_basic_register(MuContext *ctx) {
     k->slider = mu_register_node_kind(ctx, "slider", &slider_ops);
     k->check = mu_register_node_kind(ctx, "checkbox", &checkbox_ops);
     k->dropdown = mu_register_node_kind(ctx, "dropdown", &dropdown_ops);
-    k->text = mu_register_node_kind(ctx, "textinput", &textinput_ops);
+    k->text = mu_register_node_kind(ctx, "textinput", &mu_textinput_node_ops);
     k->modal = mu_register_node_kind(ctx, "modal", &modal_ops);
     k->toast = mu_register_node_kind(ctx, "toast", &toast_ops);
+    k->image = mu_register_node_kind(ctx, "image", &image_ops);
+    k->scroll = mu_register_node_kind(ctx, "scroll", &mu_scroll_node_ops);
     ctx->widgets_basic_kinds = k;
+    mu_popup_register(ctx);
+    mu_list_register(ctx);
+    mu_tabs_register(ctx);
 }
 
 uint32_t mu_kind_panel(const MuContext *ctx) {
@@ -577,6 +691,14 @@ uint32_t mu_kind_toast(const MuContext *ctx) {
     const MuWidgetsBasicKindIds *k = wb_kinds(ctx);
     return k ? k->toast : 0;
 }
+uint32_t mu_kind_image(const MuContext *ctx) {
+    const MuWidgetsBasicKindIds *k = wb_kinds(ctx);
+    return k ? k->image : 0;
+}
+uint32_t mu_kind_scroll(const MuContext *ctx) {
+    const MuWidgetsBasicKindIds *k = wb_kinds(ctx);
+    return k ? k->scroll : 0;
+}
 
 /* --- Convenience constructors (optional for apps) --- */
 MuNode *mu_make_panel(MuContext *ctx, bool column) {
@@ -585,19 +707,33 @@ MuNode *mu_make_panel(MuContext *ctx, bool column) {
         return NULL;
     MuPanelState *ps = (MuPanelState *)calloc(1, sizeof(MuPanelState));
     if (!ps) return NULL;
-    ps->flex.direction = column ? MU_FLEX_COLUMN : MU_FLEX_ROW;
-    ps->flex.justify = MU_JUSTIFY_START;
-    ps->flex.align_items = MU_ALIGN_STRETCH;
-    ps->flex.gap = 8;
-    ps->flex.pad_left = ps->flex.pad_right = ps->flex.pad_top = ps->flex.pad_bottom = 12;
     MuNode *n = mu_node_create(ctx, k->panel, ps);
     if (!n) {
         free(ps);
         return NULL;
     }
+    mu_layout_set_flex_direction(n, column ? MU_FLEX_COLUMN : MU_FLEX_ROW);
+    mu_layout_set_justify(n, MU_JUSTIFY_START);
+    mu_layout_set_align_items(n, MU_ALIGN_STRETCH);
+    mu_layout_set_gap(n, 8.f);
+    mu_layout_set_padding_all(n, 12.f);
     n->role = "panel";
     n->flags |= MU_NODE_FLEX_CONTAINER | MU_NODE_CLIP_CHILDREN;
     return n;
+}
+
+void mu_panel_set_on_click(MuNode *panel, void (*on_click)(void *), void *user) {
+    if (!panel) return;
+    MuPanelState *s = (MuPanelState *)panel->state;
+    if (!s) return;
+    s->on_click = on_click;
+    s->user = user;
+    if (on_click) {
+        panel->flags |= MU_NODE_FOCUSABLE;
+        if (!panel->role || panel->role[0] == '\0' || strcmp(panel->role, "panel") == 0 ||
+            strcmp(panel->role, "group") == 0)
+            panel->role = "tile";
+    }
 }
 
 MuNode *mu_make_label(MuContext *ctx, const char *text) {
@@ -685,6 +821,14 @@ MuNode *mu_make_dropdown(MuContext *ctx) {
         return NULL;
     }
     n->role = "dropdown";
+    n->layout.flex_shrink = 0.f;
+    if (ctx->popup_layer) {
+        s->popup = mu_make_popup(ctx);
+        if (s->popup) {
+            mu_popup_set_anchor(s->popup, n);
+            mu_popup_set_placement(s->popup, MU_POPUP_AUTO);
+        }
+    }
     return n;
 }
 
@@ -698,26 +842,6 @@ static void dropdown_add_internal(MuDropdownState *d, const char *item) {
 void mu_dropdown_add_option(MuNode *dd, const char *item) {
     if (!dd || !dd->state) return;
     dropdown_add_internal((MuDropdownState *)dd->state, item);
-}
-
-MuNode *mu_make_textinput(MuContext *ctx, const char *initial) {
-    const MuWidgetsBasicKindIds *k = wb_kinds(ctx);
-    if (!k)
-        return NULL;
-    MuTextInState *s = (MuTextInState *)calloc(1, sizeof(MuTextInState));
-    if (!s) return NULL;
-    if (initial) {
-        strncpy(s->buf, initial, sizeof(s->buf) - 1);
-        s->len = (int)strlen(s->buf);
-    }
-    MuNode *n = mu_node_create(ctx, k->text, s);
-    if (!n) {
-        free(s);
-        return NULL;
-    }
-    n->role = "input";
-    n->flags |= MU_NODE_FOCUSABLE;
-    return n;
 }
 
 MuNode *mu_make_modal(MuContext *ctx) {
@@ -761,6 +885,7 @@ void mu_modal_set_visible(MuContext *ctx, MuNode *modal, bool show) {
     MuModalState *m = (MuModalState *)modal->state;
     if (!m) return;
     m->visible = show;
+    mu_layout_mark_dirty(modal);
     if (show) {
         modal->flags |= MU_NODE_VISIBLE;
         mu_modal_push(ctx, modal->id);
@@ -768,4 +893,126 @@ void mu_modal_set_visible(MuContext *ctx, MuNode *modal, bool show) {
         modal->flags &= ~MU_NODE_VISIBLE;
         if (mu_modal_top(ctx) == modal->id) mu_modal_pop(ctx);
     }
+}
+
+void mu_label_set_text(MuNode *label, const char *text) {
+    if (!label) return;
+    MuLabelState *s = (MuLabelState *)label->state;
+    if (!s) return;
+    char *next = dup_cstr(text);
+    if (!next) return;
+    free(s->text);
+    s->text = next;
+    mu_layout_mark_dirty(label);
+}
+
+float mu_slider_get_value(const MuNode *slider) {
+    if (!slider) return 0.f;
+    const MuSliderState *s = (const MuSliderState *)slider->state;
+    return s ? s->value : 0.f;
+}
+
+const char *mu_dropdown_selected_text(const MuNode *dropdown) {
+    if (!dropdown) return "";
+    const MuDropdownState *s = (const MuDropdownState *)dropdown->state;
+    if (!s || s->n <= 0 || s->sel < 0 || s->sel >= s->n) return "";
+    return s->items[s->sel];
+}
+
+int mu_dropdown_get_selection(const MuNode *dropdown) {
+    if (!dropdown) return -1;
+    const MuDropdownState *s = (const MuDropdownState *)dropdown->state;
+    if (!s || s->n <= 0) return -1;
+    return s->sel;
+}
+
+void mu_toast_set_message(MuNode *toast, const char *msg) {
+    if (!toast) return;
+    MuToastState *s = (MuToastState *)toast->state;
+    if (!s) return;
+    strncpy(s->msg, msg ? msg : "", sizeof(s->msg) - 1);
+    s->msg[sizeof(s->msg) - 1] = '\0';
+    mu_layout_mark_dirty(toast);
+}
+
+MuNode *mu_make_image(MuContext *ctx, uint32_t image_id) {
+    const MuWidgetsBasicKindIds *k = wb_kinds(ctx);
+    if (!k) return NULL;
+    MuImageState *s = (MuImageState *)calloc(1, sizeof(MuImageState));
+    if (!s) return NULL;
+    s->image_id = image_id;
+    s->fit = MU_IMAGE_FIT_CONTAIN;
+    s->tint = (MuColor){255, 255, 255, 255};
+    s->radius = 8.f;
+    MuNode *n = mu_node_create(ctx, k->image, s);
+    if (!n) {
+        free(s);
+        return NULL;
+    }
+    n->role = "image";
+    n->layout.flex_shrink = 0.f;
+    return n;
+}
+
+void mu_image_set_id(MuNode *image, uint32_t image_id) {
+    if (!image) return;
+    MuImageState *s = (MuImageState *)image->state;
+    if (!s) return;
+    s->image_id = image_id;
+    s->intrinsic_w = 0.f;
+    s->intrinsic_h = 0.f;
+    mu_layout_mark_dirty(image);
+}
+
+uint32_t mu_image_get_id(const MuNode *image) {
+    if (!image) return MU_IMAGE_INVALID;
+    const MuImageState *s = (const MuImageState *)image->state;
+    return s ? s->image_id : MU_IMAGE_INVALID;
+}
+
+bool mu_image_set_source(MuNode *image, MuRenderContext *rc, const char *path) {
+    if (!image || !rc || !path) return false;
+    uint32_t id = mu_image_load_file(rc, path);
+    if (id == MU_IMAGE_INVALID) return false;
+    mu_image_set_id(image, id);
+    float w = 0.f, h = 0.f;
+    if (mu_image_get_size(rc, id, &w, &h)) {
+        MuImageState *s = (MuImageState *)image->state;
+        if (s) {
+            s->intrinsic_w = w;
+            s->intrinsic_h = h;
+        }
+    }
+    return true;
+}
+
+void mu_image_set_fit(MuNode *image, MuImageFit fit) {
+    if (!image) return;
+    MuImageState *s = (MuImageState *)image->state;
+    if (!s) return;
+    s->fit = fit;
+}
+
+void mu_image_set_tint(MuNode *image, MuColor tint) {
+    if (!image) return;
+    MuImageState *s = (MuImageState *)image->state;
+    if (!s) return;
+    s->tint = tint;
+}
+
+void mu_image_set_radius(MuNode *image, float radius) {
+    if (!image) return;
+    MuImageState *s = (MuImageState *)image->state;
+    if (!s) return;
+    s->radius = radius;
+}
+
+void mu_image_set_src_rect(MuNode *image, MuRect src) {
+    if (!image) return;
+    MuImageState *s = (MuImageState *)image->state;
+    if (!s) return;
+    s->src = src;
+    s->intrinsic_w = 0.f;
+    s->intrinsic_h = 0.f;
+    mu_layout_mark_dirty(image);
 }

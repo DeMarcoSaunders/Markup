@@ -53,26 +53,18 @@ static void open_modal(void *ctxv) {
 static MuNode *make_horizontal_spacer(MuContext *ctx) {
     MuNode *sp = mu_make_panel(ctx, true);
     sp->role = "page";
-    sp->flex_grow = 1;
-    sp->flex_basis = 10.f;
+    mu_layout_set_flex(sp, 1.f, 1.f, 10.f);
     return sp;
 }
 
 static void mu_demo_panel_tune(MuNode *panel, float gap, float pad_tb, float pad_lr) {
-    if (!panel || !panel->state)
-        return;
-    MuFlexLayoutState *fl = (MuFlexLayoutState *)panel->state;
-    fl->gap = gap;
-    fl->pad_top = fl->pad_bottom = pad_tb;
-    fl->pad_left = fl->pad_right = pad_lr;
+    mu_layout_set_gap(panel, gap);
+    mu_layout_set_padding(panel, pad_tb, pad_lr, pad_tb, pad_lr);
 }
 
 static void demo_flex_justify_align(MuNode *panel, MuFlexJustify j, MuFlexAlign a) {
-    if (!panel || !panel->state)
-        return;
-    MuFlexLayoutState *fl = (MuFlexLayoutState *)panel->state;
-    fl->justify = j;
-    fl->align_items = a;
+    mu_layout_set_justify(panel, j);
+    mu_layout_set_align_items(panel, a);
 }
 
 int main(void) {
@@ -95,14 +87,13 @@ int main(void) {
 
     MuNode *root = mu_make_panel(&ctx, true);
     root->role = "page";
-    root->bounds = (MuRect){0, 0, (float)W, (float)H};
+    mu_node_set_bounds(root, (MuRect){0, 0, (float)W, (float)H});
     mu_demo_panel_tune(root, 0.f, 0.f, 0.f);
     mu_context_set_root(&ctx, root);
 
     MuNode *toolbar = mu_make_panel(&ctx, false);
     toolbar->role = "toolbar";
-    toolbar->flex_grow = 0;
-    toolbar->flex_basis = 54.f;
+    mu_layout_set_flex(toolbar, 0.f, 1.f, 54.f);
     mu_demo_panel_tune(toolbar, 16.f, 0.f, 28.f);
     demo_flex_justify_align(toolbar, MU_JUSTIFY_START, MU_ALIGN_CENTER);
 
@@ -114,7 +105,7 @@ int main(void) {
 
     MuNode *body = mu_make_panel(&ctx, true);
     body->role = "page";
-    body->flex_grow = 1;
+    mu_layout_set_flex(body, 1.f, 1.f, MU_FLEX_BASIS_AUTO);
     demo_flex_justify_align(body, MU_JUSTIFY_CENTER, MU_ALIGN_CENTER);
     mu_demo_panel_tune(body, 0.f, 28.f, 20.f);
 
@@ -127,8 +118,7 @@ int main(void) {
 
     MuNode *card = mu_make_panel(&ctx, true);
     card->role = "panel";
-    card->flex_grow = 0;
-    card->flex_basis = 480.f;
+    mu_layout_set_flex(card, 0.f, 1.f, 480.f);
     mu_demo_panel_tune(card, 18.f, 26.f, 28.f);
 
     MuNode *sp_right = make_horizontal_spacer(&ctx);
@@ -170,7 +160,7 @@ int main(void) {
     mu_node_add_child(&ctx, root, toast);
 
     MuNode *modal = mu_make_modal(&ctx);
-    modal->bounds = (MuRect){0, 0, (float)W, (float)H};
+    mu_node_set_bounds(modal, (MuRect){0, 0, (float)W, (float)H});
     MuNode *dlg = mu_make_panel(&ctx, true);
     dlg->role = "panel";
     mu_demo_panel_tune(dlg, 18.f, 22.f, 26.f);
@@ -189,19 +179,17 @@ int main(void) {
 
         float sw = (float)GetScreenWidth();
         float sh = (float)GetScreenHeight();
-        root->bounds = (MuRect){0, 0, sw, sh};
-        modal->bounds = root->bounds;
+        mu_node_set_bounds(root, (MuRect){0, 0, sw, sh});
+        mu_node_set_bounds(modal, root->bounds);
 
         mu_layout_run(&ctx);
 
         if ((modal->flags & MU_NODE_VISIBLE) && dlg) {
-            dlg->bounds = (MuRect){(sw - 400) * 0.5f, (sh - 220) * 0.5f, 400, 220};
-            const MuNodeOps *ops = mu_get_node_ops(&ctx, dlg->kind);
-            if (ops && ops->layout_children)
-                ops->layout_children(&ctx, dlg);
+            mu_node_set_bounds(dlg, (MuRect){(sw - 400) * 0.5f, (sh - 220) * 0.5f, 400, 220});
+            mu_layout_node(&ctx, dlg);
         }
 
-        toast->bounds = (MuRect){sw - 268, 20, 252, 50};
+        mu_node_set_bounds(toast, (MuRect){sw - 268, 20, 252, 50});
 
         mu_raylib_frame(&ctx, &rc);
 

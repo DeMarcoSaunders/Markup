@@ -65,6 +65,7 @@ static void toggle_theme(void *ctxv) {
     MuContext *ctx = (MuContext *)ctxv;
     g_use_alt = !g_use_alt;
     mu_style_init(ctx, g_use_alt ? &g_theme_b : &g_theme_a);
+    if (ctx->root) mu_layout_mark_dirty(ctx->root);
 }
 
 int main(void) {
@@ -85,7 +86,7 @@ int main(void) {
 
     MuNode *root = mu_make_panel(&ctx, true);
     root->role = "page";
-    root->bounds = (MuRect){0, 0, (float)W, (float)H};
+    mu_node_set_bounds(root, (MuRect){0, 0, (float)W, (float)H});
     mu_context_set_root(&ctx, root);
 
     mu_node_add_child(&ctx, root, mu_make_label(&ctx, "Same tree — swap token bundle via mu_style_init"));
@@ -96,7 +97,7 @@ int main(void) {
         mu_frame_begin(&ctx);
         float sw = (float)GetScreenWidth();
         float sh = (float)GetScreenHeight();
-        root->bounds = (MuRect){0, 0, sw, sh};
+        mu_node_set_bounds(root, (MuRect){0, 0, sw, sh});
         mu_layout_run(&ctx);
         mu_raylib_frame(&ctx, &rc);
 

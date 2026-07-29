@@ -7,36 +7,34 @@
 extern "C" {
 #endif
 
-typedef enum MuFlexDirection {
-    MU_FLEX_ROW,
-    MU_FLEX_COLUMN,
-} MuFlexDirection;
+void mu_layout_init(MuLayoutStyle *ls);
 
-typedef enum MuFlexAlign {
-    MU_ALIGN_START,
-    MU_ALIGN_CENTER,
-    MU_ALIGN_END,
-    MU_ALIGN_STRETCH,
-} MuFlexAlign;
+void mu_layout_set_padding(MuNode *node, float top, float right, float bottom, float left);
+void mu_layout_set_padding_all(MuNode *node, float value);
+void mu_layout_set_margin(MuNode *node, float top, float right, float bottom, float left);
+void mu_layout_set_margin_all(MuNode *node, float value);
+void mu_layout_set_gap(MuNode *node, float gap);
+void mu_layout_set_flex_direction(MuNode *node, MuFlexDirection dir);
+void mu_layout_set_justify(MuNode *node, MuFlexJustify justify);
+void mu_layout_set_align_items(MuNode *node, MuFlexAlign align);
+void mu_layout_set_align_self(MuNode *node, MuAlignSelf align);
+void mu_layout_set_flex(MuNode *node, float grow, float shrink, float basis);
+void mu_layout_set_min_size(MuNode *node, float min_w, float min_h);
+void mu_layout_set_max_size(MuNode *node, float max_w, float max_h);
+void mu_layout_set_flex_wrap(MuNode *node, bool wrap);
 
-typedef enum MuFlexJustify {
-    MU_JUSTIFY_START,
-    MU_JUSTIFY_CENTER,
-    MU_JUSTIFY_END,
-    MU_JUSTIFY_SPACE_BETWEEN,
-    MU_JUSTIFY_SPACE_AROUND,
-} MuFlexJustify;
+/** Intrinsic size for flex containers (handles wrap). */
+void mu_layout_measure_container(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out);
 
-typedef struct MuFlexLayoutState {
-    MuFlexDirection direction;
-    MuFlexJustify justify;
-    MuFlexAlign align_items;
-    float gap;
-    MuRect padding; /* x=left y=top w=right h=bottom as l,t,r,b OR use x,y,w,h as L,T,R,B - we use l,t,r,b in x,y,w,h */
-    float pad_left, pad_top, pad_right, pad_bottom;
-} MuFlexLayoutState;
+void mu_node_set_hit_transparent(MuNode *node, bool transparent);
+void mu_layout_mark_dirty(MuNode *node);
 
-/* Stored in panel/box node state alongside MuFlexLayoutState */
+/** Set bounds; marks dirty when the rect changes. Returns true if bounds changed. */
+bool mu_node_set_bounds(MuNode *node, MuRect bounds);
+
+/** Layout one node if dirty; descendants are laid out when a flex pass runs. */
+void mu_layout_node(MuContext *ctx, MuNode *node);
+
 void mu_layout_flex_run(MuContext *ctx, MuNode *container);
 void mu_layout_run(MuContext *ctx);
 

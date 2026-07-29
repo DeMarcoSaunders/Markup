@@ -4,6 +4,9 @@
     <ClCompile Include="D:\Markup\markup\src\mu_widgets_basic.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\Markup\markup\src\mu_scroll.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="D:\Markup\CMakeLists.txt" />

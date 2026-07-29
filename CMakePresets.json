@@ -27,6 +27,23 @@
       "cacheVariables": {
         "MARKUP_FETCH_RAYLIB": "ON"
       }
+    },
+    {
+      "name": "msvc-x64-skia",
+      "displayName": "MSVC x64 — Skia + SDL3 (vcpkg)",
+      "description": "Native desktop path: Skia paint + SDL3 window. Run scripts/setup-vcpkg.ps1 first.",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-skia",
+      "environment": {
+        "PATH": "C:/Program Files/Git/cmd;C:/Program Files/Git/bin;$penv{PATH}"
+      },
+      "cacheVariables": {
+        "MARKUP_FETCH_RAYLIB": "OFF",
+        "MARKUP_WITH_SKIA": "ON",
+        "MARKUP_FETCH_SDL3": "ON",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake"
+      }
     }
   ],
   "buildPresets": [
@@ -38,6 +55,11 @@
     {
       "name": "msvc-release-vs2022",
       "configurePreset": "msvc-x64-vs2022",
+      "configuration": "Release"
+    },
+    {
+      "name": "msvc-release-skia",
+      "configurePreset": "msvc-x64-skia",
       "configuration": "Release"
     }
   ]

@@ -1,4 +1,6 @@
 #include "../include/markup/mu_core.h"
+#include "../include/markup/mu_text.h"
+#include "../include/markup/mu_layout_flex.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -39,6 +41,11 @@ void mu_context_shutdown(MuContext *ctx) {
         destroy_subtree_states(ctx, ctx->modal_layer);
         free_subtree(ctx, ctx->modal_layer);
         ctx->modal_layer = NULL;
+    }
+    if (ctx->popup_layer) {
+        destroy_subtree_states(ctx, ctx->popup_layer);
+        free_subtree(ctx, ctx->popup_layer);
+        ctx->popup_layer = NULL;
     }
     if (ctx->root) {
         destroy_subtree_states(ctx, ctx->root);
@@ -107,9 +114,9 @@ MuNode *mu_node_create(MuContext *ctx, uint32_t kind, void *state) {
     n->id = ctx->next_node_id++;
     n->kind = kind;
     n->state = state;
-    n->flags = MU_NODE_VISIBLE;
-    n->flex_grow = 0;
-    n->flex_basis = -1.0f;
+    n->flags = MU_NODE_VISIBLE | MU_NODE_LAYOUT_DIRTY;
+    mu_layout_init(&n->layout);
+    mu_text_style_init(&n->text);
     return n;
 }
 
@@ -131,6 +138,7 @@ bool mu_node_add_child(MuContext *ctx, MuNode *parent, MuNode *child) {
     }
     child->parent = parent;
     parent->children[parent->child_count++] = child;
+    mu_layout_mark_dirty(parent);
     return true;
 }
 
@@ -143,6 +151,7 @@ void mu_node_remove_child(MuContext *ctx, MuNode *parent, MuNode *child) {
                     (size_t)(parent->child_count - i - 1) * sizeof(*parent->children));
             parent->child_count--;
             child->parent = NULL;
+            mu_layout_mark_dirty(parent);
             return;
         }
     }
@@ -150,6 +159,7 @@ void mu_node_remove_child(MuContext *ctx, MuNode *parent, MuNode *child) {
 
 void mu_context_set_root(MuContext *ctx, MuNode *root) {
     ctx->root = root;
+    if (root) mu_layout_mark_dirty(root);
 }
 
 static MuNode *find_id(MuNode *node, uint32_t id) {
@@ -163,8 +173,12 @@ static MuNode *find_id(MuNode *node, uint32_t id) {
 }
 
 MuNode *mu_context_find_id(MuContext *ctx, MuNode *subtree, uint32_t id) {
-    MuNode *start = subtree ? subtree : ctx->root;
-    return find_id(start, id);
+    if (subtree) return find_id(subtree, id);
+    MuNode *f = find_id(ctx ? ctx->root : NULL, id);
+    if (f) return f;
+    if (ctx && ctx->popup_layer && (f = find_id(ctx->popup_layer, id))) return f;
+    if (ctx && ctx->modal_layer && (f = find_id(ctx->modal_layer, id))) return f;
+    return NULL;
 }
 
 void mu_frame_begin(MuContext *ctx) {

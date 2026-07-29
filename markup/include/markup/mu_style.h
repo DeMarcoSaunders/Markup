@@ -18,7 +18,7 @@ typedef struct MuStyleSnapshot {
     float pad_top, pad_right, pad_bottom, pad_left;
     float border_width;
     float radius_tl, radius_tr, radius_br, radius_bl;
-    float font_size;
+    MuTextStyle text;
 } MuStyleSnapshot;
 
 struct MuStyleModule {
@@ -38,6 +38,8 @@ struct MuStyleModule {
     MuColor modal_overlay;
     MuColor modal_bg;
     float default_font_size;
+    int default_font_weight;
+    float default_letter_spacing;
     float default_radius;
 };
 

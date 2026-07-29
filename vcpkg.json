@@ -1,0 +1,11 @@
+{
+  "dependencies": [
+    {
+      "name": "skia",
+      "default-features": false,
+      "features": ["harfbuzz", "icu", "png"]
+    },
+    "sdl3",
+    "libpng"
+  ]
+}
