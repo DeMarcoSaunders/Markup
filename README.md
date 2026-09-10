@@ -111,7 +111,7 @@ See [Getting started](#getting-started) for a copy-pasteable loop snippet.
 ### Runtime: fonts, images & assets
 
 - **Fonts:** Raylib uses **`Font`** via `mu_render_set_font`; Skia loads TTF with `mu_skia_set_font_file` / `mu_font_load_file`. Demos bundle **Inter** under **`apps/demo_minimal/assets/`**.
-- **Images:** `mu_image_load_file(&rc, path)` returns a texture id (`MU_IMAGE_INVALID` = 0). PNG decode uses **libpng** in `markup_paint` when CMake finds it (vcpkg Skia preset enables this). Supports atlas slices via `mu_image_set_src_rect` and `MuImageSheet` grid helpers.
+- **Images:** `mu_image_load_file(&rc, path)` returns a texture id (`MU_IMAGE_INVALID` = 0). Decoding uses vendored **stb_image** in `markup_paint` — PNG, JPEG and BMP, no external dependency. `mu_image_decode_last_error()` reports why a load failed. Supports atlas slices via `mu_image_set_src_rect` and `MuImageSheet` grid helpers.
 - **Paths:** load from **`assets/`** next to the executable. Demos **`POST_BUILD` copy** `apps/demo_minimal/assets/` into the output folder. Use absolute fallbacks in dev if cwd differs (see `MARKUP_DEMO_FONT_FILE_ABS` in Skia demo).
 
 ---
@@ -155,14 +155,41 @@ High-level factories in **`markup/mu_compose.h`** — no new node kinds:
 | **`demo_skia`** | Skia + SDL3 | Full gallery: icons, taskbar, carousel, list, tabs, popup dropdown, themes |
 | **`demo_minimal`** | Raylib | Baseline loop, modal, toast |
 | **`demo_retheme`** | Raylib | Two themes via `MuStyleModule` swap |
+| **`demo_soft`** | Software (no GPU) | Damage-tracked loop, frosted glass, spring-animated card, button hover lift, scroll rubber-banding, custom node kind, `--shot <file.bmp>` |
+| **`demo_physics`** | Software (no GPU) | Rigid bodies driving node bounds; click to drop, `--shot <file.bmp>` |
+
+### Rendering without a GPU
+
+**`markup::soft`** renders into a plain ARGB8888 buffer using only libc and `math.h` — no
+GPU, no windowing library. It brings **damage tracking** (repaint only what changed) and a
+real **backdrop blur** for frosted glass, neither of which the other backends provide.
+
+See **[RENDERING.md](RENDERING.md)** for the frame loop, the glass API, and the blur cache.
+
+### Physics
+
+**`markup::physics`** is a 2D rigid body simulation independent of the UI stack, and
+**`markup::physics_node`** binds bodies to nodes so they drive node bounds — after which
+damage tracking, clipping and painting all just work.
+
+See **[PHYSICS.md](PHYSICS.md)**.
+
+### Animation
+
+**`markup::anim`** springs a value — or, via `MuAnimator`, all four edges of a node's
+bounds — toward a target in closed form, so re-aiming mid-flight is smooth at any frame
+rate and never needs a stepped integrator.
+
+See **[ANIMATION.md](ANIMATION.md)**.
 
 ### Optional stubs (not implemented)
 
-**`MARKUP_WITH_BLUR`**, **`MARKUP_WITH_STYLE_FILE`**, **`MARKUP_WITH_EXTRA_WIDGETS`**.
+**`MARKUP_WITH_STYLE_FILE`**, **`MARKUP_WITH_EXTRA_WIDGETS`**.
 
 ### Known gaps
 
-Multiline textinput, text selection, copy/paste, tree, tooltips, animations, SVG.
+Multiline textinput, text selection, copy/paste, tree, tooltips, SVG.
+Backdrop blur is real only on `markup::soft`; raylib and Skia degrade to a flat tint.
 
 ---
 
@@ -218,14 +245,20 @@ CloseWindow();
 | `markup::core` | `MuContext`, `MuNode` tree, node kind registry, arenas, modal stack hooks |
 | `markup::layout_flex` | `mu_layout_run` — flex layout, stretch, wrap, grow/shrink |
 | `markup::style` | `MuStyleModule` tokens, `mu_style_resolve` from `MuNode.role`, label word-wrap |
-| `markup::paint` | `mu_paint_all`, `mu_image_util`, PNG decode via libpng (`mu_image_decode_*`) |
+| `markup::paint` | `mu_paint_all`, `mu_paint_damaged`, damage collection, `mu_image_util`, image decode via stb_image (`mu_image_decode_*`) |
 | `markup::input` | Hover/focus, modal routing, pointer/key/text dispatch |
 | `markup::compose` | `mu_compose_*`, `MuIconDesc` factories |
+| `markup::soft` | CPU rasterizer — ARGB8888 surface, AA rounded rects, stb_truetype text, backdrop blur ([RENDERING.md](RENDERING.md)) |
 | `markup::raylib` | Raylib `MuRenderContext`, `mu_draw_*`, `mu_raylib_frame` |
 | `markup::skia` + `markup::sdl` | Skia raster backend + SDL3 window/input (`MARKUP_WITH_SKIA`) |
+| `markup::physics` | 2D rigid bodies — SAT collision, sequential impulses, split-impulse resolution ([PHYSICS.md](PHYSICS.md)) |
+| `markup::physics_node` | `physics_world` kind — bodies drive node bounds; the only file joining physics to the tree |
+| `markup::anim` | `MuSpring` + `MuAnimator` — closed-form spring motion, node bounds keyed by id ([ANIMATION.md](ANIMATION.md)) |
 | `markup::widgets_basic` | Built-in widget kinds and **`mu_make_*`** factories |
 
 Each visible node uses a **`uint32_t` kind id** wired to **`MuNodeOps`** (measure / layout / paint / hit-test / input). Flex containers (**`MU_NODE_FLEX_CONTAINER`**) use **`mu_layout_flex`**.
+
+**Backend selection is automatic.** Each backend library declares its `MU_BACKEND_*` macro as a PUBLIC compile definition, so linking one is what picks the `MuRenderContext` layout. Linking two is a compile error rather than silent memory corruption — see `mu_backend.h`.
 
 ---
 
@@ -347,7 +380,9 @@ CMake options:
 - **`MARKUP_FETCH_RAYLIB`** (default ON) — Raylib 5.0 via FetchContent. OFF → **`find_package(raylib REQUIRED)`**.
 - **`MARKUP_WITH_SKIA`** (default OFF) — Skia + SDL3 backend and **`demo_skia`**. Uses vcpkg manifest (`skia` with PNG, `libpng`, `sdl3`).
 - **`MARKUP_FETCH_SDL3`** (default ON when Skia) — Fetch SDL3; OFF → **`find_package(SDL3)`**.
-- **`MARKUP_WITH_BLUR`**, **`MARKUP_WITH_STYLE_FILE`**, **`MARKUP_WITH_EXTRA_WIDGETS`** — optional stub libs.
+- **`MARKUP_WITH_STYLE_FILE`**, **`MARKUP_WITH_EXTRA_WIDGETS`** — optional stub libs.
+
+`markup_soft` needs no options and no third-party dependency of its own; it builds by default, and neither it nor `demo_soft` nor any test links a GPU library.
 
 ### Skia desktop (Windows)
 

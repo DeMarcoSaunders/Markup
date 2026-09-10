@@ -33,10 +33,6 @@ enum {
     MU_KEY_END = 269,
 };
 
-typedef struct MuTextEvent {
-    unsigned int codepoint;
-} MuTextEvent;
-
 void mu_modal_push(MuContext *ctx, uint32_t modal_root_id);
 void mu_modal_pop(MuContext *ctx);
 uint32_t mu_modal_top(const MuContext *ctx);
@@ -46,7 +42,6 @@ MuNode *mu_input_node_at(MuContext *ctx, MuVec2 position);
 void mu_input_update_hover(MuContext *ctx, MuVec2 mouse);
 void mu_input_dispatch_pointer(MuContext *ctx, const MuPointerEvent *ev);
 void mu_input_dispatch_key(MuContext *ctx, const MuKeyEvent *ev);
-void mu_input_dispatch_text(MuContext *ctx, const MuTextEvent *ev);
 void mu_input_dispatch_char(MuContext *ctx, unsigned int codepoint);
 void mu_focus_set(MuContext *ctx, uint32_t node_id);
 void mu_focus_advance_tab(MuContext *ctx);

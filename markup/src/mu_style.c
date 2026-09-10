@@ -41,6 +41,9 @@ static void default_theme(MuStyleModule *m) {
     m->checkbox_fill = (MuColor){59, 130, 246, 255};
     m->modal_overlay = (MuColor){0, 0, 0, 160};
     m->modal_bg = (MuColor){255, 255, 255, 255};
+    /* Low alpha: the blurred backdrop is the effect; these only lift and cool it. */
+    m->glass_bg = (MuColor){255, 255, 255, 90};
+    m->glass_border = (MuColor){255, 255, 255, 140};
     m->default_font_size = 16;
     m->default_font_weight = MU_TEXT_WEIGHT_NORMAL;
     m->default_letter_spacing = 1.f;
@@ -93,6 +96,14 @@ void mu_style_resolve(MuContext *ctx, MuNode *node, MuStyleSnapshot *out) {
         out->foreground = t->label_fg;
         out->border = t->toolbar_border;
         out->radius_tl = out->radius_tr = out->radius_br = out->radius_bl = 0.f;
+        out->border_width = 1.f;
+    } else if (strcmp(r, "glass") == 0) {
+        /* Deliberately translucent: the node's backdrop blur shows through this. An
+         * opaque background here hides the effect completely — which is exactly what
+         * happens if this branch is missing and the role falls through to panel_bg. */
+        out->background = t->glass_bg;
+        out->foreground = t->label_fg;
+        out->border = t->glass_border;
         out->border_width = 1.f;
     } else if (strcmp(r, "subtitle") == 0) {
         out->foreground = t->muted_fg;

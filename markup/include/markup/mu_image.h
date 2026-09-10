@@ -64,11 +64,19 @@ typedef struct MuImageRgba {
     int stride;
 } MuImageRgba;
 
-/** Decode PNG from disk into RGBA8. Returns false when libpng is unavailable or decode fails. */
+/** Decode PNG/JPEG/BMP from disk into RGBA8. */
 bool mu_image_decode_rgba_file(const char *path, MuImageRgba *out);
 
-/** Decode PNG bytes into RGBA8. */
+/** Decode PNG/JPEG/BMP bytes into RGBA8. The path targets with no stdio should use. */
 bool mu_image_decode_rgba_memory(const void *data, size_t size, MuImageRgba *out);
+
+/**
+ * Why the last decode failed, or NULL if the last one succeeded.
+ *
+ * Distinguishes a missing file from a corrupt one from an unsupported format, which
+ * MU_IMAGE_INVALID on its own cannot. Points at static storage; not thread-safe.
+ */
+const char *mu_image_decode_last_error(void);
 
 void mu_image_rgba_free(MuImageRgba *img);
 

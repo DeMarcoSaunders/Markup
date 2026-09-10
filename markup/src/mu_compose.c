@@ -9,19 +9,6 @@ void mu_icon_desc_init(MuIconDesc *desc) {
     desc->tint = (MuColor){255, 255, 255, 255};
 }
 
-MuIconDesc mu_icon_desc_id(uint32_t image_id) {
-    MuIconDesc d;
-    mu_icon_desc_init(&d);
-    d.image_id = image_id;
-    return d;
-}
-
-MuIconDesc mu_icon_desc_slice(uint32_t image_id, float sx, float sy, float sw, float sh) {
-    MuIconDesc d = mu_icon_desc_id(image_id);
-    d.src = (MuRect){sx, sy, sw, sh};
-    return d;
-}
-
 void mu_compose_decorative(MuNode *node) {
     mu_node_set_hit_transparent(node, true);
 }
@@ -54,10 +41,6 @@ static MuNode *compose_apply_icon(MuContext *ctx, MuRenderContext *rc, const MuI
     if (d->radius > 0.f) mu_image_set_radius(icon, d->radius);
     compose_icon_layout(icon, d);
     return icon;
-}
-
-MuNode *mu_compose_icon(MuContext *ctx, MuRenderContext *rc, const MuIconDesc *desc) {
-    return compose_apply_icon(ctx, rc, desc);
 }
 
 MuNode *mu_compose_icon_chip(MuContext *ctx, MuRenderContext *rc, const MuIconDesc *desc) {
@@ -166,66 +149,6 @@ MuNode *mu_compose_icon_carousel(MuContext *ctx, MuRenderContext *rc, const MuIc
     return scroll;
 }
 
-MuNode *mu_compose_icon_label(MuContext *ctx, uint32_t icon_id, const char *label, float icon_size) {
-    if (!ctx) return NULL;
-    if (icon_size < 8.f) icon_size = 24.f;
-
-    MuNode *row = mu_make_panel(ctx, false);
-    row->role = "group";
-    mu_layout_set_gap(row, 10.f);
-    mu_layout_set_align_items(row, MU_ALIGN_CENTER);
-    mu_layout_set_padding_all(row, 0.f);
-
-    MuIconDesc d = mu_icon_desc_id(icon_id);
-    d.size = icon_size;
-    MuNode *icon = compose_apply_icon(ctx, NULL, &d);
-    if (!icon) return row;
-    mu_compose_decorative(icon);
-    mu_node_add_child(ctx, row, icon);
-
-    MuNode *lbl = mu_make_label(ctx, label ? label : "");
-    mu_compose_decorative(lbl);
-    mu_node_add_child(ctx, row, lbl);
-    return row;
-}
-
-MuNode *mu_compose_app_tile(MuContext *ctx, uint32_t icon_id, const char *label, void (*on_click)(void *),
-                            void *user) {
-    if (!ctx) return NULL;
-
-    MuIconDesc d = mu_icon_desc_id(icon_id);
-    d.label = label;
-    d.size = 48.f;
-    d.radius = 12.f;
-    d.on_click = on_click;
-    d.user = user;
-
-    MuNode *tile = mu_compose_icon_chip(ctx, NULL, &d);
-    if (tile) {
-        mu_layout_set_min_size(tile, 80.f, 0.f);
-        tile->role = "tile";
-    }
-    return tile;
-}
-
-MuNode *mu_compose_card(MuContext *ctx, const char *title) {
-    if (!ctx) return NULL;
-    MuNode *card = mu_make_panel(ctx, true);
-    card->role = "panel";
-    mu_layout_set_flex(card, 1.f, 1.f, 0.f);
-    mu_layout_set_align_self(card, MU_ALIGN_SELF_STRETCH);
-    mu_layout_set_min_size(card, 240.f, 0.f);
-    mu_layout_set_gap(card, 12.f);
-    mu_layout_set_padding(card, 24.f, 28.f, 24.f, 28.f);
-
-    if (title && title[0]) {
-        MuNode *h = mu_make_label(ctx, title);
-        h->role = "heading";
-        mu_node_add_child(ctx, card, h);
-    }
-    return card;
-}
-
 MuNode *mu_compose_flow(MuContext *ctx, float gap) {
     if (!ctx) return NULL;
     MuNode *flow = mu_make_panel(ctx, false);
@@ -236,17 +159,6 @@ MuNode *mu_compose_flow(MuContext *ctx, float gap) {
     mu_layout_set_align_items(flow, MU_ALIGN_START);
     mu_layout_set_padding_all(flow, 0.f);
     return flow;
-}
-
-MuNode *mu_compose_scroll_column(MuContext *ctx, float min_height) {
-    if (!ctx) return NULL;
-    MuNode *scroll = mu_make_scroll(ctx, MU_SCROLL_VERTICAL);
-    if (!scroll) return NULL;
-    float h = min_height > 0.f ? min_height : 160.f;
-    mu_layout_set_min_size(scroll, 0.f, h);
-    mu_layout_set_max_size(scroll, 0.f, h);
-    mu_layout_set_flex(scroll, 0.f, 0.f, h);
-    return scroll;
 }
 
 MuNode *mu_compose_list(MuContext *ctx, float min_height) {

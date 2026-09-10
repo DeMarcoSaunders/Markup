@@ -12,7 +12,6 @@ void mu_layout_init(MuLayoutStyle *ls);
 void mu_layout_set_padding(MuNode *node, float top, float right, float bottom, float left);
 void mu_layout_set_padding_all(MuNode *node, float value);
 void mu_layout_set_margin(MuNode *node, float top, float right, float bottom, float left);
-void mu_layout_set_margin_all(MuNode *node, float value);
 void mu_layout_set_gap(MuNode *node, float gap);
 void mu_layout_set_flex_direction(MuNode *node, MuFlexDirection dir);
 void mu_layout_set_justify(MuNode *node, MuFlexJustify justify);

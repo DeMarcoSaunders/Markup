@@ -41,15 +41,9 @@ struct MuRenderContext {
 void mu_render_init(MuRenderContext *rc);
 void mu_render_shutdown(MuRenderContext *rc);
 
-/** Current font: same as the active render context font, used for text metrics during layout. */
-Font mu_raylib_ui_font(void);
-
 /** Swap the font used for drawing and text metrics. If take_ownership is true, mu_render_shutdown calls
  * UnloadFont (never pass true for GetFontDefault()). */
 void mu_render_set_font(MuRenderContext *rc, Font font, bool take_ownership);
-
-void mu_render_begin(MuRenderContext *rc);
-void mu_render_end(MuRenderContext *rc);
 
 Color mu_to_ray(MuColor c);
 

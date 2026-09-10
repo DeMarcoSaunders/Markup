@@ -7,8 +7,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * Scrollable viewport with optional horizontal/vertical bars.
+ *
+ * A scroll node owns one content child. The node itself is the viewport and carries
+ * MU_NODE_CLIP_CHILDREN; scroll_layout_children lays the content out at its full natural
+ * size and then offsets its bounds by (-offset_x, -offset_y). Nothing is virtualised —
+ * every child is laid out and painted, and clipping does the hiding.
+ *
+ * Bar visibility is circular by nature: showing a vertical bar narrows the viewport,
+ * which can force a horizontal bar, which shortens it again. scroll_needs_v/h resolve
+ * that in a fixed order rather than iterating to a fixed point, so a content size within
+ * one bar-width of the viewport can settle either way. scroll_bar_geom is the single
+ * source of truth for the resulting rects and is reused by hit-testing and painting.
+ *
+ * Bars are drawn in paint_overlay, not paint, so they sit above the clipped content.
+ */
+
 #define MU_SCROLL_BAR_SIZE 10.f
 #define MU_SCROLL_THUMB_MIN 24.f
+#define MU_SCROLL_THUMB_RADIUS 4.f
 
 typedef enum MuScrollDrag {
     MU_SCROLL_DRAG_NONE = 0,
@@ -28,6 +46,10 @@ typedef struct MuScrollState {
     float drag_anchor_y;
     float drag_start_scroll_x;
     float drag_start_scroll_y;
+    /* Requested-minus-clamped offset, accumulated since the last mu_scroll_get_excess.
+     * Positive means an offset change asked to go past the max end, negative past zero. */
+    float excess_x;
+    float excess_y;
 } MuScrollState;
 
 typedef struct MuScrollBarGeom {
@@ -335,11 +357,11 @@ static void scroll_paint_overlay(MuContext *ctx, MuNode *node, MuRenderContext *
 
     if (g.show_v) {
         mu_draw_rect(rc, g.track_v, track, (MuColor){0, 0, 0, 0}, 0.f, 2.f);
-        if (g.thumb_v.h > 0.f) mu_draw_rect(rc, g.thumb_v, thumb, thumb, 0.f, 4.f);
+        if (g.thumb_v.h > 0.f) mu_draw_rect(rc, g.thumb_v, thumb, thumb, 0.f, MU_SCROLL_THUMB_RADIUS);
     }
     if (g.show_h) {
         mu_draw_rect(rc, g.track_h, track, (MuColor){0, 0, 0, 0}, 0.f, 2.f);
-        if (g.thumb_h.w > 0.f) mu_draw_rect(rc, g.thumb_h, thumb, thumb, 0.f, 4.f);
+        if (g.thumb_h.w > 0.f) mu_draw_rect(rc, g.thumb_h, thumb, thumb, 0.f, MU_SCROLL_THUMB_RADIUS);
     }
 }
 
@@ -417,7 +439,13 @@ void mu_scroll_set_offset(MuContext *ctx, MuNode *scroll, float x, float y) {
     if (s->axis & MU_SCROLL_HORIZONTAL) s->scroll_x = x;
     if (s->axis & MU_SCROLL_VERTICAL) s->scroll_y = y;
     MuScrollBarGeom g = scroll_bar_geom(scroll, s);
+    float pre_x = s->scroll_x, pre_y = s->scroll_y;
     scroll_clamp(s, g.view.w, g.view.h);
+    s->excess_x += pre_x - s->scroll_x;
+    s->excess_y += pre_y - s->scroll_y;
+    /* The content child moving is caught by the damage snapshot, but the scrollbar thumb
+     * is painted by this node's overlay at unchanged bounds, so mark it explicitly. */
+    mu_node_mark_paint_dirty(scroll);
     if (ctx) {
         scroll_layout_children(ctx, scroll);
         scroll->flags &= ~MU_NODE_LAYOUT_DIRTY;
@@ -432,6 +460,16 @@ void mu_scroll_get_offset(const MuNode *scroll, float *out_x, float *out_y) {
     if (out_y) *out_y = s ? s->scroll_y : 0.f;
 }
 
+void mu_scroll_get_excess(MuNode *scroll, float *out_x, float *out_y) {
+    MuScrollState *s = scroll_state(scroll);
+    if (out_x) *out_x = s ? s->excess_x : 0.f;
+    if (out_y) *out_y = s ? s->excess_y : 0.f;
+    if (s) {
+        s->excess_x = 0.f;
+        s->excess_y = 0.f;
+    }
+}
+
 void mu_scroll_by(MuContext *ctx, MuNode *scroll, float dx, float dy) {
     MuScrollState *s = scroll_state(scroll);
     if (!s) return;
@@ -440,17 +478,6 @@ void mu_scroll_by(MuContext *ctx, MuNode *scroll, float dx, float dy) {
     if (s->axis & MU_SCROLL_HORIZONTAL) nx -= dx;
     if (s->axis & MU_SCROLL_VERTICAL) ny -= dy;
     mu_scroll_set_offset(ctx, scroll, nx, ny);
-}
-
-void mu_scroll_get_extents(const MuNode *scroll, float *out_content_w, float *out_content_h, float *out_viewport_w,
-                           float *out_viewport_h) {
-    const MuScrollState *s = scroll ? (const MuScrollState *)scroll->state : NULL;
-    if (!s) return;
-    if (out_content_w) *out_content_w = s->content_w;
-    if (out_content_h) *out_content_h = s->content_h;
-    MuScrollBarGeom g = scroll_bar_geom(scroll, s);
-    if (out_viewport_w) *out_viewport_w = g.view.w;
-    if (out_viewport_h) *out_viewport_h = g.view.h;
 }
 
 void mu_widgets_dispatch_wheel(MuContext *ctx, MuVec2 position, float delta_x, float delta_y) {

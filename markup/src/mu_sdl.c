@@ -4,6 +4,7 @@
 #include "../include/markup/mu_widgets_basic.h"
 
 #include <SDL3/SDL.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 struct MuSdlApp {
@@ -148,19 +149,38 @@ bool mu_sdl_poll(MuSdlApp *app, MuContext *ctx) {
     return true;
 }
 
-void mu_sdl_present(MuSdlApp *app, MuRenderContext *rc) {
+void mu_sdl_present_rect(MuSdlApp *app, MuRenderContext *rc, MuRect area) {
     if (!app || !rc || !app->texture) return;
     int w = 0, h = 0, stride = 0;
-    const void *pixels = mu_skia_pixel_data(rc, &w, &h, &stride);
+    const void *pixels = mu_present_pixel_data(rc, &w, &h, &stride);
     if (!pixels || w <= 0 || h <= 0) return;
 
     if (w != app->width || h != app->height) refresh_size(app);
 
-    SDL_UpdateTexture(app->texture, NULL, pixels, stride);
+    int x0 = (int)floorf(area.x), y0 = (int)floorf(area.y);
+    int x1 = (int)ceilf(area.x + area.w), y1 = (int)ceilf(area.y + area.h);
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > w) x1 = w;
+    if (y1 > h) y1 = h;
+
+    if (x1 > x0 && y1 > y0) {
+        SDL_Rect r = {x0, y0, x1 - x0, y1 - y0};
+        /* SDL wants the pixels for the sub-rect, so offset into the surface. */
+        const unsigned char *base = (const unsigned char *)pixels;
+        const void *sub = base + (size_t)y0 * (size_t)stride + (size_t)x0 * 4u;
+        SDL_UpdateTexture(app->texture, &r, sub, stride);
+    }
+
     SDL_SetRenderDrawColor(app->renderer, 0, 0, 0, 255);
     SDL_RenderClear(app->renderer);
     SDL_RenderTexture(app->renderer, app->texture, NULL, NULL);
     SDL_RenderPresent(app->renderer);
+}
+
+void mu_sdl_present(MuSdlApp *app, MuRenderContext *rc) {
+    if (!app) return;
+    mu_sdl_present_rect(app, rc, (MuRect){0.f, 0.f, (float)app->width, (float)app->height});
 }
 
 void mu_sdl_frame(MuContext *ctx, MuSdlApp *app) {

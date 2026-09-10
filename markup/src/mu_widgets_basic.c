@@ -10,6 +10,34 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * Core widget set: panel, label, button, slider, checkbox, dropdown, modal, toast, image.
+ *
+ * Every widget follows the same shape — a private MuXxxState heap-allocated by its
+ * mu_make_* constructor, plus a static MuNodeOps table wiring destroy/measure/layout/
+ * paint/hit_test/on_pointer. Node kind ids are registered once per context by
+ * mu_widgets_basic_register and stashed on ctx->widgets_basic_kinds (see wb_kinds),
+ * so several contexts can coexist in one process.
+ *
+ * Widgets never read the theme directly: mu_style_resolve turns node->role plus the
+ * node's hover/pressed/disabled flags into a MuStyleSnapshot, and paint code uses only
+ * that. Adding a visual variant therefore means adding a role, not a branch here.
+ *
+ * Scroll, popup, list, tabs and textinput live in their own files but register through
+ * this one so all kind ids stay in a single table.
+ */
+
+/* Default geometry, in points. Grouped here so a reader can retune the widget set
+ * without hunting through paint code. */
+#define MU_LABEL_TEXT_INSET 4.f    /* total horizontal padding around label text */
+#define MU_LABEL_MIN_WRAP_WIDTH 8.f /* below this, don't attempt word wrapping */
+#define MU_MENU_ROW_PAD_V 8.f
+#define MU_MENU_ROW_PAD_H 12.f
+#define MU_PANEL_GAP 8.f
+#define MU_PANEL_PADDING 12.f
+#define MU_IMAGE_DEFAULT_RADIUS 8.f
+#define MU_IMAGE_PLACEHOLDER_RADIUS 4.f
+
 static char *dup_cstr(const char *s) {
     const char *src = s ? s : "";
     size_t n = strlen(src) + 1;
@@ -113,8 +141,41 @@ static void panel_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     float rad = (st.radius_tl + st.radius_tr + st.radius_br + st.radius_bl) * 0.25f;
-    if (st.background.a > 0)
+
+    /* Frosted glass: blur the backdrop first, then let the (translucent) background and
+     * border paint over it as usual.
+     *
+     * The blur only needs recomputing when what it reads changes, which is far rarer than
+     * the panel repainting — a button hovering inside it damages the panel without
+     * touching the backdrop at all. mu_node_backdrop_unchanged answers that question, and
+     * only when it says yes may the cache replay the previous result. */
+    if (node->backdrop_blur > 0.f) {
+        /*
+         * The background is handed to the blur as its tint rather than painted over the
+         * result. It is the same source-over arithmetic either way, but done once per
+         * pixel instead of twice, and it lets the cache hold the finished glass rather
+         * than a bare blur that still needs a fill on top.
+         *
+         * It is also the more correct of the two. Painting the background afterwards
+         * applies the rounded rect's antialiasing twice — once compositing the blur onto
+         * the backdrop, then again compositing the fill onto that — so edge pixels ended
+         * up under-tinted against the panel's own interior. Tinting first composites the
+         * finished glass colour against the backdrop exactly once.
+         */
+        MuColor tint = st.background;
+        if (!mu_node_backdrop_unchanged(ctx, node) ||
+            !mu_backdrop_cache_try(rc, node, node->bounds, node->backdrop_blur, tint, rad)) {
+            mu_draw_backdrop_blur(rc, node->bounds, node->backdrop_blur, tint, rad);
+            mu_backdrop_cache_store(rc, node, node->bounds, node->backdrop_blur, tint, rad);
+            /* Recomputed from the current backdrop, so whatever invalidated it is now
+             * accounted for. Clearing here rather than in mu_damage_collect is what lets
+             * the flag survive frames where the node never painted. */
+            mu_node_backdrop_mark_clean(node);
+        }
+    } else if (st.background.a > 0) {
         mu_draw_rect(rc, node->bounds, st.background, (MuColor){0, 0, 0, 0}, 0.f, rad);
+    }
+
     if (st.border.a > 0 && st.border_width > 0.f)
         mu_draw_rect(rc, node->bounds, (MuColor){0, 0, 0, 0}, st.border, st.border_width, rad);
 }
@@ -160,15 +221,15 @@ static void label_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *ou
     MuLabelState *s = (MuLabelState *)node->state;
     const char *t = s && s->text ? s->text : "";
     MuTextMetrics tm;
-    float wrap_w = avail.x > 0.f ? avail.x - 4.f : 0.f;
+    float wrap_w = avail.x > 0.f ? avail.x - MU_LABEL_TEXT_INSET : 0.f;
     if (node->layout.max_width > 0.f && (wrap_w <= 0.f || node->layout.max_width < wrap_w))
-        wrap_w = node->layout.max_width - 4.f;
-    if (wrap_w > 8.f)
+        wrap_w = node->layout.max_width - MU_LABEL_TEXT_INSET;
+    if (wrap_w > MU_LABEL_MIN_WRAP_WIDTH)
         mu_text_measure_wrapped(NULL, t, &st.text, wrap_w, &tm);
     else
         mu_text_measure(NULL, t, &st.text, &tm);
-    out->x = tm.width + 4.f;
-    out->y = tm.height + 4.f;
+    out->x = tm.width + MU_LABEL_TEXT_INSET;
+    out->y = tm.height + MU_LABEL_TEXT_INSET;
     if (avail.x > 0.f && out->x > avail.x) out->x = avail.x;
 }
 
@@ -192,7 +253,7 @@ static const MuNodeOps label_ops = {.destroy_state = label_destroy,
                                     .on_char = NULL};
 
 /* --- Button --- */
-static void btn_destroy(MuContext *ctx, MuNode *node) {
+static void button_destroy(MuContext *ctx, MuNode *node) {
     (void)ctx;
     MuButtonState *s = (MuButtonState *)node->state;
     if (s) {
@@ -202,7 +263,7 @@ static void btn_destroy(MuContext *ctx, MuNode *node) {
     node->state = NULL;
 }
 
-static void btn_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) {
+static void button_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) {
     (void)avail;
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
@@ -214,23 +275,23 @@ static void btn_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out)
     out->y = tm.height + 16;
 }
 
-static bool btn_pt_in(MuContext *ctx, MuNode *node, MuVec2 pt) {
+/* hit_test signature wrapper around widget_pt_in. */
+static bool button_pt_in(MuContext *ctx, MuNode *node, MuVec2 pt) {
     (void)ctx;
-    return pt.x >= node->bounds.x && pt.x < node->bounds.x + node->bounds.w && pt.y >= node->bounds.y &&
-           pt.y < node->bounds.y + node->bounds.h;
+    return widget_pt_in(node, pt);
 }
 
-static bool btn_ptr(MuContext *ctx, MuNode *node, const void *evp) {
+static bool button_ptr(MuContext *ctx, MuNode *node, const void *evp) {
     const MuPointerEvent *ev = (const MuPointerEvent *)evp;
     MuButtonState *s = (MuButtonState *)node->state;
     if (!s) return false;
-    if (ev->released && btn_pt_in(ctx, node, ev->position) && s->on_click) s->on_click(s->user);
+    if (ev->released && button_pt_in(ctx, node, ev->position) && s->on_click) s->on_click(s->user);
     (void)ev->pressed;
     (void)ev->drag;
     return true;
 }
 
-static void btn_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
+static void button_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     float rad = (st.radius_tl + st.radius_tr + st.radius_br + st.radius_bl) * 0.25f;
@@ -244,12 +305,12 @@ static void btn_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     mu_draw_text(rc, t, tx, ty, &st.text, st.foreground);
 }
 
-static const MuNodeOps button_ops = {.destroy_state = btn_destroy,
-                                     .measure = btn_measure,
+static const MuNodeOps button_ops = {.destroy_state = button_destroy,
+                                     .measure = button_measure,
                                      .layout_children = NULL,
-                                     .paint = btn_paint,
-                                     .hit_test = btn_pt_in,
-                                     .on_pointer = btn_ptr,
+                                     .paint = button_paint,
+                                     .hit_test = button_pt_in,
+                                     .on_pointer = button_ptr,
                                      .on_key = NULL,
                                      .on_char = NULL};
 
@@ -279,7 +340,13 @@ static bool slider_ptr(MuContext *ctx, MuNode *node, const void *evp) {
         float t = (ev->position.x - node->bounds.x) / node->bounds.w;
         if (t < 0) t = 0;
         if (t > 1) t = 1;
-        s->value = s->min_v + t * (s->max_v - s->min_v);
+        float next = s->min_v + t * (s->max_v - s->min_v);
+        if (next != s->value) {
+            s->value = next;
+            /* Only the thumb moves: same bounds, same flags, so the damage snapshot
+             * cannot see this. */
+            mu_node_mark_paint_dirty(node);
+        }
     }
     if (ev->released) ctx->captured_pointer_id = 0;
     return true;
@@ -307,13 +374,13 @@ static const MuNodeOps slider_ops = {.destroy_state = slider_destroy,
                                        .on_char = NULL};
 
 /* --- Checkbox --- */
-static void cb_destroy(MuContext *ctx, MuNode *node) {
+static void checkbox_destroy(MuContext *ctx, MuNode *node) {
     (void)ctx;
     free(node->state);
     node->state = NULL;
 }
 
-static void cb_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) {
+static void checkbox_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) {
     (void)ctx;
     (void)node;
     (void)avail;
@@ -321,7 +388,7 @@ static void cb_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) 
     out->y = 22;
 }
 
-static bool cb_ptr(MuContext *ctx, MuNode *node, const void *evp) {
+static bool checkbox_ptr(MuContext *ctx, MuNode *node, const void *evp) {
     const MuPointerEvent *ev = (const MuPointerEvent *)evp;
     MuCheckboxState *s = (MuCheckboxState *)node->state;
     if (!s) return false;
@@ -330,13 +397,14 @@ static bool cb_ptr(MuContext *ctx, MuNode *node, const void *evp) {
         if (mx >= node->bounds.x && mx < node->bounds.x + node->bounds.w && my >= node->bounds.y &&
             my < node->bounds.y + node->bounds.h) {
             s->checked = !s->checked;
+            mu_node_mark_paint_dirty(node); /* fill appears/disappears in place */
             if (s->on_toggle) s->on_toggle(s->user, s->checked);
         }
     }
     return true;
 }
 
-static void cb_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
+static void checkbox_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     MuCheckboxState *s = (MuCheckboxState *)node->state;
@@ -347,12 +415,12 @@ static void cb_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     }
 }
 
-static const MuNodeOps checkbox_ops = {.destroy_state = cb_destroy,
-                                        .measure = cb_measure,
+static const MuNodeOps checkbox_ops = {.destroy_state = checkbox_destroy,
+                                        .measure = checkbox_measure,
                                         .layout_children = NULL,
-                                        .paint = cb_paint,
+                                        .paint = checkbox_paint,
                                         .hit_test = NULL,
-                                        .on_pointer = cb_ptr,
+                                        .on_pointer = checkbox_ptr,
                                         .on_key = NULL,
                                         .on_char = NULL};
 
@@ -398,7 +466,8 @@ static void dropdown_rebuild_menu(MuContext *ctx, MuNode *dd) {
 
         MuNode *row = mu_make_panel(ctx, false);
         row->role = "group";
-        mu_layout_set_padding(row, 8.f, 12.f, 8.f, 12.f);
+        mu_layout_set_padding(row, MU_MENU_ROW_PAD_V, MU_MENU_ROW_PAD_H, MU_MENU_ROW_PAD_V,
+                              MU_MENU_ROW_PAD_H);
         mu_layout_set_gap(row, 0.f);
         mu_panel_set_on_click(row, dropdown_pick, &s->picks[i]);
 
@@ -411,7 +480,7 @@ static void dropdown_rebuild_menu(MuContext *ctx, MuNode *dd) {
     mu_layout_mark_dirty(s->popup);
 }
 
-static void dd_destroy(MuContext *ctx, MuNode *node) {
+static void dropdown_destroy(MuContext *ctx, MuNode *node) {
     MuDropdownState *s = (MuDropdownState *)node->state;
     if (s && s->popup) mu_popup_close(ctx, s->popup);
     (void)ctx;
@@ -419,7 +488,7 @@ static void dd_destroy(MuContext *ctx, MuNode *node) {
     node->state = NULL;
 }
 
-static void dd_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) {
+static void dropdown_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     MuDropdownState *s = (MuDropdownState *)node->state;
@@ -435,7 +504,7 @@ static void dd_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) 
     out->y = 38.f;
 }
 
-static bool dd_ptr(MuContext *ctx, MuNode *node, const void *evp) {
+static bool dropdown_ptr(MuContext *ctx, MuNode *node, const void *evp) {
     const MuPointerEvent *ev = (const MuPointerEvent *)evp;
     MuDropdownState *s = (MuDropdownState *)node->state;
     if (!s || s->n <= 0 || !widget_pt_in(node, ev->position)) return false;
@@ -456,7 +525,7 @@ static bool dd_ptr(MuContext *ctx, MuNode *node, const void *evp) {
     return true;
 }
 
-static void dd_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
+static void dropdown_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     MuDropdownState *s = (MuDropdownState *)node->state;
@@ -476,12 +545,12 @@ static void dd_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     mu_draw_text(rc, "v", node->bounds.x + node->bounds.w - 18.f, ty, &st.text, chevron);
 }
 
-static const MuNodeOps dropdown_ops = {.destroy_state = dd_destroy,
-                                        .measure = dd_measure,
+static const MuNodeOps dropdown_ops = {.destroy_state = dropdown_destroy,
+                                        .measure = dropdown_measure,
                                         .layout_children = NULL,
-                                        .paint = dd_paint,
+                                        .paint = dropdown_paint,
                                         .hit_test = NULL,
-                                        .on_pointer = dd_ptr,
+                                        .on_pointer = dropdown_ptr,
                                         .on_key = NULL,
                                         .on_char = NULL};
 
@@ -610,7 +679,7 @@ static void image_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
         MuStyleSnapshot st;
         mu_style_resolve(ctx, node, &st);
         mu_draw_rect(rc, node->bounds, (MuColor){st.foreground.r, st.foreground.g, st.foreground.b, 40},
-                     st.border, 1.f, s ? s->radius : 4.f);
+                     st.border, 1.f, s ? s->radius : MU_IMAGE_PLACEHOLDER_RADIUS);
         return;
     }
 
@@ -715,8 +784,8 @@ MuNode *mu_make_panel(MuContext *ctx, bool column) {
     mu_layout_set_flex_direction(n, column ? MU_FLEX_COLUMN : MU_FLEX_ROW);
     mu_layout_set_justify(n, MU_JUSTIFY_START);
     mu_layout_set_align_items(n, MU_ALIGN_STRETCH);
-    mu_layout_set_gap(n, 8.f);
-    mu_layout_set_padding_all(n, 12.f);
+    mu_layout_set_gap(n, MU_PANEL_GAP);
+    mu_layout_set_padding_all(n, MU_PANEL_PADDING);
     n->role = "panel";
     n->flags |= MU_NODE_FLEX_CONTAINER | MU_NODE_CLIP_CHILDREN;
     return n;
@@ -943,7 +1012,7 @@ MuNode *mu_make_image(MuContext *ctx, uint32_t image_id) {
     s->image_id = image_id;
     s->fit = MU_IMAGE_FIT_CONTAIN;
     s->tint = (MuColor){255, 255, 255, 255};
-    s->radius = 8.f;
+    s->radius = MU_IMAGE_DEFAULT_RADIUS;
     MuNode *n = mu_node_create(ctx, k->image, s);
     if (!n) {
         free(s);
@@ -962,12 +1031,6 @@ void mu_image_set_id(MuNode *image, uint32_t image_id) {
     s->intrinsic_w = 0.f;
     s->intrinsic_h = 0.f;
     mu_layout_mark_dirty(image);
-}
-
-uint32_t mu_image_get_id(const MuNode *image) {
-    if (!image) return MU_IMAGE_INVALID;
-    const MuImageState *s = (const MuImageState *)image->state;
-    return s ? s->image_id : MU_IMAGE_INVALID;
 }
 
 bool mu_image_set_source(MuNode *image, MuRenderContext *rc, const char *path) {

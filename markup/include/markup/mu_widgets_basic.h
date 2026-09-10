@@ -56,7 +56,6 @@ void mu_toast_set_message(MuNode *toast, const char *msg);
 
 MuNode *mu_make_image(MuContext *ctx, uint32_t image_id);
 void mu_image_set_id(MuNode *image, uint32_t image_id);
-uint32_t mu_image_get_id(const MuNode *image);
 bool mu_image_set_source(MuNode *image, MuRenderContext *rc, const char *path);
 void mu_image_set_fit(MuNode *image, MuImageFit fit);
 void mu_image_set_tint(MuNode *image, MuColor tint);
@@ -69,9 +68,16 @@ MuNode *mu_scroll_content(MuNode *scroll);
 void mu_scroll_set_offset(MuContext *ctx, MuNode *scroll, float x, float y);
 void mu_scroll_get_offset(const MuNode *scroll, float *out_x, float *out_y);
 void mu_scroll_by(MuContext *ctx, MuNode *scroll, float dx, float dy);
-void mu_scroll_get_extents(const MuNode *scroll, float *out_content_w, float *out_content_h,
-                           float *out_viewport_w, float *out_viewport_h);
 void mu_widgets_dispatch_wheel(MuContext *ctx, MuVec2 position, float delta_x, float delta_y);
+
+/**
+ * How much of the most recent offset change(s) the clamp absorbed — positive past the
+ * max end, negative past zero — accumulated since the last call and reset by reading it.
+ * mu_scroll.c has no notion of animation; this just surfaces information the clamp already
+ * computes, so a caller can drive its own spring for rubber-banding without this widget
+ * depending on markup_anim.
+ */
+void mu_scroll_get_excess(MuNode *scroll, float *out_x, float *out_y);
 
 #include "mu_list.h"
 #include "mu_tabs.h"

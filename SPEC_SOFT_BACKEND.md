@@ -139,10 +139,25 @@ and chrome as correctly-positioned flat colored boxes. Layout is visibly correct
 
 ---
 
-### Phase 2 — Rounded rects, borders, AA · ~2 days
+### Phase 2 — Rounded rects, borders, AA · DONE
 
 **Decision: use an SDF, not analytic scanline spans.** One function handles fill,
 border, and any radius; uniform AA quality; ~60 lines instead of ~180.
+
+**Outcome.** Implemented in `draw_rounded` / `sdf_span` / `sdf_round_box`. The perf
+escape hatch below was *not* deferrable — measured at 58.6 ms/frame (Debug) for the
+benchmark load, because corner-band rows were evaluating the SDF across the full rect
+width to render what is actually a straight edge. Restricting per-pixel evaluation to
+the two corner columns, and computing the constant coverage of the flat span between
+them once per row, cut that to 18.3 ms Debug / **4.0 ms Release**, against a
+square-corner baseline of 2.1 ms Release. Output was byte-identical before and after.
+
+Benchmark: 200 rects of 280x96 at radius 8, with a 1px border, into a 1200x800 surface.
+That is a deliberately heavy synthetic load; real frames draw far fewer.
+
+Square corners (`radius <= 0.5`) keep the snapped integer path — UI chrome stays crisp
+rather than softened, and skips the SDF entirely. A test asserts no partial coverage is
+ever produced there.
 
 ```c
 static float sdf_round_box(float px, float py, float hw, float hh, float r) {
@@ -157,15 +172,45 @@ cov = clampf(0.5f - d, 0.f, 1.f);
 
 Border falls out as `cov_outer - cov_inner`, where inner is inset by `border_w`.
 
-**Perf escape hatch (defer until measured):** only evaluate the SDF inside the four
-`r × r` corner boxes. The cross-shaped interior is fully opaque and span-fills.
+**Perf escape hatch — required, now implemented.** Per-pixel SDF evaluation happens only
+in the four `r × r` corner boxes. Everything else is a span: the vertical straight band
+gets a solid fill with a 2px antialiased fringe at each end, and the horizontal band
+between the corners gets one coverage evaluation reused across the span (coverage there
+does not vary with x, so this is exact, not an approximation).
 
-**Exit criteria:** visual parity with the raylib backend for all non-text chrome.
-Side-by-side screenshots differ only in AA quality.
+**Exit criteria:** met. Corner geometry and AA verified by pixel assertions plus a
+rendered coverage dump; clip containment verified against a sentinel-filled surface;
+confirmed on screen via `demo_soft`.
+
+### `demo_soft` and the raylib-free build
+
+`markup_sdl` no longer depends on Skia — it presents through `mu_present_pixel_data()`,
+so `MARKUP_WITH_SDL=ON` builds the harness plus `demo_soft` with no GPU stack at all.
+
+Two build shapes are now verified:
+
+```
+cmake -S . -B build          -DMARKUP_WITH_SDL=ON                    # raylib + software
+cmake -S . -B build-nogpu    -DMARKUP_WITH_RAYLIB=OFF -DMARKUP_WITH_SDL=ON   # software only
+```
+
+The second acquires neither raylib nor Skia and still produces `demo_soft` and both test
+binaries — the standing proof that the software path carries no GPU dependency. Getting
+there needed `markup_raylib`, `markup_demo_font` and the raylib acquisition itself to be
+guarded; they had been unconditional.
+
+`demo_soft --shot <file.bmp>` renders one frame, writes it, and exits. The software
+backend holds no GPU state, so that file is exactly what the window shows, which makes
+it usable for visual review and for CI without a display.
+
+Text does not paint yet, so the demo is deliberately a chrome gallery. Corner radius is
+resolved from a node's role, so stock widgets cannot vary it per instance; the radius
+sweep therefore registers a small custom node kind, which doubles as a demonstration
+that new widget types need no changes to any core file.
 
 ---
 
-### Phase 3 — Text via stb_truetype · ~3–4 days
+### Phase 3 — Text via stb_truetype · DONE
 
 Do not write a font rasterizer. `stb_truetype.h` is public domain, single-header,
 and needs only `libc` + `math.h`. It provides TTF parsing, glyph rasterization to an
@@ -188,12 +233,30 @@ item on this list into one of the easier ones.
 blending) and gamma-correct blending (text will look slightly thin; acceptable in v1,
 note it).
 
-**Exit criteria:** labels, buttons, text inputs, and wrapped text all render legibly.
-`mu_text_measure_wrapped` works with zero changes to `mu_text_layout.c`.
+**Exit criteria:** met. Labels, button captions, headings and the text input all render
+legibly in `demo_soft`; `mu_text_measure_wrapped` works with **zero** changes to
+`mu_text_layout.c`, as designed — it only ever needed the `mu_text_measure` primitive.
+
+**Outcome.** Implemented in `mu_soft_text.c` (~470 lines) with `stb_truetype.h` v1.26
+vendored to `markup/vendor/`. No download was needed: raylib already bundles the official
+public-domain release, so it was copied from the existing checkout.
+
+`struct MuRenderContext` gained one `void *text` field, so stb_truetype stays entirely
+out of the public headers. `mu_soft_internal.h` shares the clip/blend helpers between
+`mu_soft.c` and `mu_soft_text.c` rather than duplicating them.
+
+Font acquisition is explicit — `mu_soft_set_font_file()` loads the default slot. There is
+deliberately no platform font enumeration: on a bare-metal target there is nothing to
+enumerate. With no font loaded, `mu_text_measure` still returns a proportional estimate so
+layout stays plausible, and `mu_draw_text` paints nothing. A test pins that behaviour.
+
+Perf (Release): 2120 glyphs/frame in 1.50 ms, i.e. ~0.7 µs per glyph including cache
+lookup and blend. The atlas only ever grows downward, so cached glyph coordinates stay
+valid and the cache is never flushed.
 
 ---
 
-### Phase 4 — Images · ~1–2 days
+### Phase 4 — Images · DONE
 
 - `mu_image_load_file` → call the existing `mu_image_decode_rgba_file`, store the
   RGBA8 buffer in an image slot. No new decoder needed.
@@ -201,12 +264,43 @@ note it).
 - `mu_draw_image` → bilinear-sampled blit with scale + tint. Reuse
   `mu_image_resolve_src` and `mu_image_fit_dst` for all geometry.
 
-**Exit criteria:** imagebox and sprite-sheet widgets render correctly under all three
-`MuImageFit` modes.
+**Exit criteria:** met. All three `MuImageFit` modes, tint, alpha and corner rounding
+verified by pixel assertions and confirmed on screen in `demo_soft`.
+
+**Outcome.** Bilinear blit in `mu_draw_image`, reusing `mu_image_resolve_src` and
+`mu_image_fit_dst` for geometry as planned.
+
+Three things the plan did not anticipate:
+
+- **A latent Phase 1 bug.** `mu_image_load_file` read `src.width`/`src.height` *after*
+  `mu_image_rgba_free`, which zeroes them — so every loaded image registered as 0x0 and
+  could never draw. Invisible until now only because libpng is absent in this
+  environment, so decode failed before reaching it. A test pins the size now.
+- **`mu_soft_image_from_rgba`** was added. libpng is optional and will not exist on a
+  bare-metal target, so there had to be a way to hand over pixels directly; embed image
+  data at build time and register it. `mu_image_load_file` is now a thin wrapper that
+  decodes and calls it. It also lets the image tests run with no decoder present.
+- **COVER is clipped to `dst`.** `mu_image_fit_dst` deliberately overflows the box on one
+  axis for COVER, and `image_paint` pushes no scissor, so the Skia backend paints outside
+  the node's own bounds. The software backend confines the blit to `dst`. That is a
+  divergence, and the Skia path should be fixed to match rather than this one relaxed.
+
+Images are stored **premultiplied**. Filtering straight alpha blends the colour of fully
+transparent texels into their neighbours and halos every soft edge; premultiplying once
+at load also removes all per-tap alpha work from the inner loop. Taps clamp to the source
+rect rather than the image, so sprite-sheet cells cannot bleed into neighbours.
+
+Perf: the benchmark load (100 images, 64x64 scaled to 96x96, ~920k filtered pixels) runs
+in roughly **18-24 ms/frame** Release. Premultiplied storage plus fixed-point weights took
+that down from ~47 ms. A 16.16 fixed-point source stepper was also tried and made no
+measurable difference — this machine's run-to-run spread is wide enough (17.9-24.4 ms on
+identical binaries, min-of-7) that finer comparisons are not meaningful here, so treat
+these as a range rather than a point estimate. Real frames draw a handful of icons, not a
+screen's worth of scaled imagery.
 
 ---
 
-### Phase 5 — Paint damage tracking · ~2–3 days
+### Phase 5 — Paint damage tracking · DONE
 
 `mu_paint_all` currently repaints the entire tree unconditionally every frame. On a
 GPU this is invisible. Software-rasterizing a full 1080p frame every tick is the
@@ -222,8 +316,41 @@ far easier now than as a retrofit.**
 - `mu_paint_all` clips to the damage rect and skips clean subtrees.
 - Backend presents only the damaged region.
 
-**Exit criteria:** an idle frame with no input costs approximately zero fill. Hovering
-one button repaints roughly that button's bounds, not the screen.
+**Exit criteria:** met. Measured on 60 buttons in a 1200x800 surface (Release, min of 5):
+
+| | ms/frame |
+|---|---|
+| Full repaint every frame (previous behaviour) | 2.790 |
+| Damage tracking, idle | 0.000 — no pixel work at all |
+| Damage tracking, hover moving between two buttons | 0.060 |
+
+**Outcome.** Damage is mostly *discovered*, not declared. `mu_damage_collect` compares
+each node's bounds and style flags against a per-node snapshot (`prev_bounds`,
+`prev_flags`), so movement, resizing, visibility and hover/press/focus are caught without
+any call site remembering to mark. That choice was deliberate: a missed invalidation
+leaves stale pixels that persist until something else happens to overlap them, which is a
+horrible thing to debug, and instrumenting every mutation site by hand is exactly how such
+misses happen. `mu_layout_mark_dirty` also sets the paint bit, which covers most widget
+state for free. Only changes invisible to all of that — a slider value, a checkbox
+toggle, a scroll thumb — call `mu_node_mark_paint_dirty` explicitly, and those three were
+found by auditing rather than assumed.
+
+A node whose geometry changed damages **both** its old and new bounds, or a move leaves a
+copy behind. Node removal and destruction damage the vacated area, since once out of the
+tree nothing is left to report it.
+
+Painting stayed a single union rect rather than tiles or per-node lists. Repainting
+everything intersecting that rect in normal order is what keeps overlap and transparency
+correct — a node is never redrawn without whatever shows through beneath it. Subtrees that
+cannot touch the rect are pruned, and clipping containers are pruned wholesale.
+
+Opt-in, to avoid breaking existing callers: `mu_paint_all` still repaints unconditionally,
+and `mu_paint_damaged` is the damage-aware entry point. The Skia and raylib demos are
+untouched. `mu_soft_begin_frame_rect` clears only the damage, and `mu_sdl_present_rect`
+uploads only that sub-rect.
+
+`ctx->damage_force_all` forces full repaint and is the A/B reference for hunting a
+suspected stale pixel.
 
 ---
 

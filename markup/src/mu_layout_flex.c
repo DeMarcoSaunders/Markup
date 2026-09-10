@@ -3,6 +3,35 @@
 #include <math.h>
 #include <stddef.h>
 
+/*
+ * Flexbox layout.
+ *
+ * mu_layout_flex_run is a single-line CSS flexbox pass over one container:
+ *
+ *   1. measure intrinsics — ask each visible child for its desired size
+ *   2. grow               — distribute positive free space by flex_grow
+ *   2b. shrink            — absorb negative free space weighted by flex_shrink * size
+ *   3. position           — place along the main axis per justify, cross axis per align
+ *
+ * Wrapping (flex_wrap on a row) is a separate path, layout_flex_wrap_run, which slices
+ * children into lines and runs the same positioning per line. Column wrapping is not
+ * supported.
+ *
+ * The one non-obvious step is in pass 1: a child with flex_grow > 0 is measured against
+ * an *estimated* share of the container rather than the full available size. Without
+ * this, a growing child that wraps text (a label) measures at full container width,
+ * reports one tall line, and then gets grown again — so the container ends up sized for
+ * text that will actually re-wrap narrower. The estimate is deliberately crude; it only
+ * has to put the measurement in the right ballpark before pass 2 assigns real sizes.
+ *
+ * Scratch arrays come from ctx->scratch, the per-frame bump arena reset in mu_frame_begin,
+ * so layout does no malloc. A container bails out rather than laying out if the arena is
+ * exhausted.
+ *
+ * Sizes are computed main-axis-first via the is_row/main_size/set_main helpers, which is
+ * why the row and column cases mostly share one code path instead of being duplicated.
+ */
+
 void mu_layout_init(MuLayoutStyle *ls) {
     if (!ls) return;
     ls->flex_grow = 0.f;
@@ -21,6 +50,11 @@ void mu_layout_init(MuLayoutStyle *ls) {
 }
 
 void mu_layout_mark_dirty(MuNode *node) {
+    /* Also mark paint on the node itself: anything worth re-laying-out is worth
+     * repainting, and this covers most widget state changes without each setter having
+     * to remember. Ancestors get only the layout bit — damaging their bounds too would
+     * escalate every small change to the whole window. */
+    if (node) node->flags |= MU_NODE_PAINT_DIRTY;
     for (MuNode *n = node; n; n = n->parent) n->flags |= MU_NODE_LAYOUT_DIRTY;
 }
 
@@ -56,10 +90,6 @@ void mu_layout_set_margin(MuNode *node, float top, float right, float bottom, fl
     node->layout.margin_bottom = bottom;
     node->layout.margin_left = left;
     mu_layout_mark_dirty(node);
-}
-
-void mu_layout_set_margin_all(MuNode *node, float value) {
-    mu_layout_set_margin(node, value, value, value, value);
 }
 
 void mu_layout_set_gap(MuNode *node, float gap) {
@@ -370,11 +400,9 @@ void mu_layout_flex_run(MuContext *ctx, MuNode *container) {
     if (!sizes || !grow || !shrink || !visible) return;
 
     MuVec2 avail = {inner.w, inner.h};
-    int vis_count = 0;
-    float total_main = 0.f;
-    float total_grow = 0.f;
-    float total_shrink_score = 0.f;
 
+    /* How many visible children want to grow — used to estimate each one's share while
+     * measuring in pass 1 (see file header). */
     int grow_vis = 0;
     for (int i = 0; i < n; i++) {
         MuNode *ch = container->children[i];
@@ -418,10 +446,11 @@ void mu_layout_flex_run(MuContext *ctx, MuNode *container) {
         shrink[i] = ch->layout.flex_shrink > 0.f ? ch->layout.flex_shrink : 0.f;
     }
 
-    vis_count = 0;
-    total_main = 0.f;
-    total_grow = 0.f;
-    total_shrink_score = 0.f;
+    /* Totals over the measured sizes, including gaps and margins. */
+    int vis_count = 0;
+    float total_main = 0.f;
+    float total_grow = 0.f;
+    float total_shrink_score = 0.f;
     for (int i = 0; i < n; i++) {
         if (!visible[i]) continue;
         MuNode *ch = container->children[i];

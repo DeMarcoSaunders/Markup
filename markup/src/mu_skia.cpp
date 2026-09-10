@@ -369,6 +369,51 @@ extern "C" const void *mu_skia_pixel_data(MuRenderContext *rc, int *out_w, int *
     return pm.addr();
 }
 
+extern "C" const void *mu_present_pixel_data(MuRenderContext *rc, int *out_w, int *out_h, int *out_row_bytes) {
+    return mu_skia_pixel_data(rc, out_w, out_h, out_row_bytes);
+}
+
+extern "C" void mu_draw_backdrop_blur(MuRenderContext *rc, MuRect area, float blur_radius, MuColor tint,
+                                      float corner_radius) {
+    /* Degraded: a flat tint, no blur.
+     *
+     * Skia can do this properly — saveLayer with SkImageFilters::Blur as the backdrop
+     * filter is the intended API — but this tree cannot currently build or run the Skia
+     * backend (no Skia available), so that code would ship unverified. Left as a tint
+     * until it can actually be compiled and looked at. */
+    (void)blur_radius;
+    if (!rc || tint.a == 0) return;
+    mu_draw_rect(rc, area, tint, MuColor{0, 0, 0, 0}, 0.f, corner_radius);
+}
+
+/* No cache while the blur above is a flat tint. When this becomes a real saveLayer blur,
+ * an SkImage of the filtered layer is the natural thing to hold here. */
+extern "C" bool mu_backdrop_cache_try(MuRenderContext *rc, const MuNode *node, MuRect area,
+                                      float blur_radius, MuColor tint, float corner_radius) {
+    (void)rc;
+    (void)node;
+    (void)area;
+    (void)blur_radius;
+    (void)tint;
+    (void)corner_radius;
+    return false;
+}
+
+extern "C" void mu_backdrop_cache_store(MuRenderContext *rc, const MuNode *node, MuRect area,
+                                        float blur_radius, MuColor tint, float corner_radius) {
+    (void)rc;
+    (void)node;
+    (void)area;
+    (void)blur_radius;
+    (void)tint;
+    (void)corner_radius;
+}
+
+extern "C" void mu_backdrop_cache_drop(MuRenderContext *rc, const MuNode *node) {
+    (void)rc;
+    (void)node;
+}
+
 extern "C" void mu_text_measure(MuRenderContext *rc, const char *text, const MuTextStyle *style, MuTextMetrics *out) {
     rc = measure_rc(rc);
     if (!out) return;

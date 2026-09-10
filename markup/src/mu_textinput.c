@@ -6,8 +6,37 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * Single-line text input.
+ *
+ * State is a fixed MU_TEXTINPUT_CAP buffer holding UTF-8. The cursor is a BYTE offset,
+ * but it is always kept on a character boundary: delete, arrow movement, click
+ * positioning and insertion all step whole sequences via the utf8_* helpers below.
+ * textinput_clamp_cursor snaps any offset that arrives mid-sequence, so an out-of-band
+ * write to MuTextInState.cursor degrades to the nearest boundary instead of corrupting
+ * the buffer.
+ *
+ * Both input paths agree on that: the SDL backend inserts pre-encoded text via
+ * mu_textinput_insert_utf8, while backends that deliver codepoints (raylib) go through
+ * textinput_char, which encodes to UTF-8 rather than dropping non-ASCII.
+ *
+ * Not handled: grapheme clusters. A combining mark or emoji ZWJ sequence is several
+ * codepoints, so backspace deletes one codepoint of it at a time rather than the whole
+ * cluster. Fixing that needs Unicode tables and belongs with real text shaping.
+ *
+ * scroll_x keeps the caret visible when text overflows the field: textinput_sync_scroll
+ * is the single place that adjusts it, and every edit path must end there or the caret
+ * drifts out of view.
+ *
+ * Hit-testing (textinput_cursor_from_x) and painting must agree on the text origin, or
+ * clicks land on the wrong character. That shared origin is MU_TEXTINPUT_PAD_X — change
+ * it in one place only.
+ */
+
 #define MU_TEXTINPUT_CAP 256
 #define MU_TEXTINPUT_PLACEHOLDER_LEN 64
+/* Horizontal inset of text from the field edge. Shared by hit-testing and painting. */
+#define MU_TEXTINPUT_PAD_X 10.f
 
 typedef struct MuTextInState {
     char buf[MU_TEXTINPUT_CAP];
@@ -19,18 +48,52 @@ typedef struct MuTextInState {
 
 const MuNodeOps mu_textinput_node_ops;
 
-static MuTextInState *ti_state(MuNode *node) {
+static MuTextInState *textinput_state(MuNode *node) {
     return node ? (MuTextInState *)node->state : NULL;
 }
 
-static void ti_clamp_cursor(MuTextInState *s) {
+/* --- UTF-8 boundary helpers ------------------------------------------------------
+ * The buffer holds UTF-8 while the cursor is a byte offset, so anything that moves or
+ * deletes has to land on a character boundary. Continuation bytes are 10xxxxxx; every
+ * other byte starts a character. buf[len] is the NUL terminator, which is a boundary. */
+
+static bool utf8_is_continuation(char c) {
+    return ((unsigned char)c & 0xC0u) == 0x80u;
+}
+
+/** Boundary at or before `i` — snaps a mid-sequence offset backwards. */
+static int utf8_snap(const char *buf, int i) {
+    if (i <= 0) return 0;
+    while (i > 0 && utf8_is_continuation(buf[i])) i--;
+    return i;
+}
+
+/** Start of the character before `i`. */
+static int utf8_prev(const char *buf, int i) {
+    if (i <= 0) return 0;
+    i--;
+    while (i > 0 && utf8_is_continuation(buf[i])) i--;
+    return i;
+}
+
+/** Start of the character after the one at `i`, clamped to `len`. */
+static int utf8_next(const char *buf, int len, int i) {
+    if (i >= len) return len;
+    i++;
+    while (i < len && utf8_is_continuation(buf[i])) i++;
+    return i;
+}
+
+static void textinput_clamp_cursor(MuTextInState *s) {
     if (!s) return;
     if (s->cursor < 0) s->cursor = 0;
     if (s->cursor > s->len) s->cursor = s->len;
+    /* A click or an externally-set offset can land mid-sequence. */
+    s->cursor = utf8_snap(s->buf, s->cursor);
 }
 
-static void ti_sync_scroll(MuContext *ctx, MuNode *node, MuRenderContext *rc, const MuTextStyle *text) {
-    MuTextInState *s = ti_state(node);
+static void textinput_sync_scroll(MuContext *ctx, MuNode *node, MuRenderContext *rc, const MuTextStyle *text) {
+    MuTextInState *s = textinput_state(node);
     if (!s) return;
 
     char prefix[MU_TEXTINPUT_CAP];
@@ -43,7 +106,7 @@ static void ti_sync_scroll(MuContext *ctx, MuNode *node, MuRenderContext *rc, co
 
     MuTextMetrics caret_m = {0.f, 0.f};
     mu_text_measure(rc, prefix, text, &caret_m);
-    float pad = 10.f;
+    float pad = MU_TEXTINPUT_PAD_X;
     float inner_w = node->bounds.w - pad * 2.f;
     if (inner_w < 1.f) inner_w = 1.f;
 
@@ -60,104 +123,102 @@ static void ti_sync_scroll(MuContext *ctx, MuNode *node, MuRenderContext *rc, co
     (void)ctx;
 }
 
-static int ti_cursor_from_x(MuNode *node, MuRenderContext *rc, const MuTextStyle *text, float x) {
-    MuTextInState *s = ti_state(node);
+static int textinput_cursor_from_x(MuNode *node, MuRenderContext *rc, const MuTextStyle *text, float x) {
+    MuTextInState *s = textinput_state(node);
     if (!s) return 0;
 
-    float pad = 10.f;
+    float pad = MU_TEXTINPUT_PAD_X;
     float rel = x - (node->bounds.x + pad - s->scroll_x);
-    if (rel <= 0.f) return 0;
+    if (rel <= 0.f || s->len <= 0) return 0;
 
-    for (int i = 0; i <= s->len; i++) {
-        char tmp[MU_TEXTINPUT_CAP];
-        int n = i < s->len ? i + 1 : i;
-        if (n > 0) {
-            memcpy(tmp, s->buf, (size_t)n);
-            tmp[n] = '\0';
-        } else {
-            tmp[0] = '\0';
-        }
+    /* Step character boundaries, measuring the prefix ending at each one, and return the
+     * boundary nearest the click. Measuring prefixes (rather than summing per-character
+     * widths) keeps this correct for proportional and kerned fonts. */
+    char prefix[MU_TEXTINPUT_CAP];
+    int prev = 0;
+    float prev_w = 0.f;
+    for (int i = utf8_next(s->buf, s->len, 0);; i = utf8_next(s->buf, s->len, i)) {
+        memcpy(prefix, s->buf, (size_t)i);
+        prefix[i] = '\0';
         MuTextMetrics tm = {0.f, 0.f};
-        mu_text_measure(rc, tmp, text, &tm);
-        if (i < s->len) {
-            char tmp2[MU_TEXTINPUT_CAP];
-            memcpy(tmp2, s->buf, (size_t)(i + 1));
-            tmp2[i + 1] = '\0';
-            MuTextMetrics tm2 = {0.f, 0.f};
-            mu_text_measure(rc, tmp2, text, &tm2);
-            float mid = (tm.width + tm2.width) * 0.5f;
-            if (rel < mid) return i;
-        } else if (rel <= tm.width) {
-            return i;
-        }
+        mu_text_measure(rc, prefix, text, &tm);
+
+        if (rel < (prev_w + tm.width) * 0.5f) return prev;
+        prev = i;
+        prev_w = tm.width;
+        if (i >= s->len) break;
     }
     return s->len;
 }
 
-static void ti_destroy(MuContext *ctx, MuNode *node) {
+static void textinput_destroy(MuContext *ctx, MuNode *node) {
     (void)ctx;
     free(node->state);
     node->state = NULL;
 }
 
-static void ti_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) {
+static void textinput_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *out) {
     (void)ctx;
     (void)node;
     out->x = avail.x > 0.f ? avail.x : 240.f;
     out->y = 34.f;
 }
 
-static bool ti_ptr(MuContext *ctx, MuNode *node, const void *evp) {
+static bool textinput_ptr(MuContext *ctx, MuNode *node, const void *evp) {
     const MuPointerEvent *ev = (const MuPointerEvent *)evp;
     if (!ev->pressed) return true;
     mu_focus_set(ctx, node->id);
-    MuTextInState *s = ti_state(node);
+    MuTextInState *s = textinput_state(node);
     if (!s) return true;
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
-    s->cursor = ti_cursor_from_x(node, NULL, &st.text, ev->position.x);
-    ti_clamp_cursor(s);
-    ti_sync_scroll(ctx, node, NULL, &st.text);
+    s->cursor = textinput_cursor_from_x(node, NULL, &st.text, ev->position.x);
+    textinput_clamp_cursor(s);
+    textinput_sync_scroll(ctx, node, NULL, &st.text);
     return true;
 }
 
-static bool ti_delete_before(MuTextInState *s) {
+static bool textinput_delete_before(MuTextInState *s) {
     if (!s || s->cursor <= 0 || s->len <= 0) return false;
-    memmove(&s->buf[s->cursor - 1], &s->buf[s->cursor], (size_t)(s->len - s->cursor + 1));
-    s->len--;
-    s->cursor--;
+    int start = utf8_prev(s->buf, s->cursor);
+    int span = s->cursor - start;
+    memmove(&s->buf[start], &s->buf[s->cursor], (size_t)(s->len - s->cursor + 1));
+    s->len -= span;
+    s->cursor = start;
     return true;
 }
 
-static bool ti_delete_after(MuTextInState *s) {
+static bool textinput_delete_after(MuTextInState *s) {
     if (!s || s->cursor >= s->len) return false;
-    memmove(&s->buf[s->cursor], &s->buf[s->cursor + 1], (size_t)(s->len - s->cursor));
-    s->len--;
+    int end = utf8_next(s->buf, s->len, s->cursor);
+    int span = end - s->cursor;
+    memmove(&s->buf[s->cursor], &s->buf[end], (size_t)(s->len - end + 1));
+    s->len -= span;
     return true;
 }
 
-static bool ti_key(MuContext *ctx, MuNode *node, const void *evp) {
+static bool textinput_key(MuContext *ctx, MuNode *node, const void *evp) {
     const MuKeyEvent *ev = (const MuKeyEvent *)evp;
-    MuTextInState *s = ti_state(node);
+    MuTextInState *s = textinput_state(node);
     if (!s || !ev->pressed) return false;
 
     bool changed = false;
     switch (ev->key) {
     case MU_KEY_BACKSPACE:
-        changed = ti_delete_before(s);
+        changed = textinput_delete_before(s);
         break;
     case MU_KEY_DELETE:
-        changed = ti_delete_after(s);
+        changed = textinput_delete_after(s);
         break;
     case MU_KEY_LEFT:
         if (s->cursor > 0) {
-            s->cursor--;
+            s->cursor = utf8_prev(s->buf, s->cursor);
             changed = true;
         }
         break;
     case MU_KEY_RIGHT:
         if (s->cursor < s->len) {
-            s->cursor++;
+            s->cursor = utf8_next(s->buf, s->len, s->cursor);
             changed = true;
         }
         break;
@@ -180,40 +241,73 @@ static bool ti_key(MuContext *ctx, MuNode *node, const void *evp) {
     if (changed) {
         MuStyleSnapshot st;
         mu_style_resolve(ctx, node, &st);
-        ti_sync_scroll(ctx, node, NULL, &st.text);
+        textinput_sync_scroll(ctx, node, NULL, &st.text);
         mu_layout_mark_dirty(node);
     }
     return changed;
 }
 
-static bool ti_char(MuContext *ctx, MuNode *node, unsigned int cp) {
-    MuTextInState *s = ti_state(node);
-    if (!s || cp < 32u || s->len >= MU_TEXTINPUT_CAP - 1) return false;
-    if (cp >= 127u) return false;
-    if (s->cursor < 0) s->cursor = 0;
-    if (s->cursor > s->len) s->cursor = s->len;
-    memmove(&s->buf[s->cursor + 1], &s->buf[s->cursor], (size_t)(s->len - s->cursor + 1));
-    s->buf[s->cursor++] = (char)cp;
-    s->len++;
+/** Encode `cp` into `out` (max 4 bytes). Returns the length, or 0 if not encodable. */
+static int utf8_encode(unsigned int cp, char out[4]) {
+    if (cp > 0x10FFFFu) return 0;
+    if (cp >= 0xD800u && cp <= 0xDFFFu) return 0; /* lone surrogate */
+    if (cp < 0x80u) {
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800u) {
+        out[0] = (char)(0xC0u | (cp >> 6));
+        out[1] = (char)(0x80u | (cp & 0x3Fu));
+        return 2;
+    }
+    if (cp < 0x10000u) {
+        out[0] = (char)(0xE0u | (cp >> 12));
+        out[1] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+        out[2] = (char)(0x80u | (cp & 0x3Fu));
+        return 3;
+    }
+    out[0] = (char)(0xF0u | (cp >> 18));
+    out[1] = (char)(0x80u | ((cp >> 12) & 0x3Fu));
+    out[2] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+    out[3] = (char)(0x80u | (cp & 0x3Fu));
+    return 4;
+}
+
+static bool textinput_char(MuContext *ctx, MuNode *node, unsigned int cp) {
+    MuTextInState *s = textinput_state(node);
+    if (!s || cp < 32u || cp == 127u) return false;
+
+    /* Encode rather than reject non-ASCII: the buffer is UTF-8, and the SDL backend
+     * already inserts multi-byte text through mu_textinput_insert_utf8. Dropping it
+     * here would make behaviour depend on which backend delivered the keystroke. */
+    char enc[4];
+    int n = utf8_encode(cp, enc);
+    if (n == 0 || s->len + n >= MU_TEXTINPUT_CAP) return false;
+
+    textinput_clamp_cursor(s);
+    memmove(&s->buf[s->cursor + n], &s->buf[s->cursor], (size_t)(s->len - s->cursor + 1));
+    memcpy(&s->buf[s->cursor], enc, (size_t)n);
+    s->cursor += n;
+    s->len += n;
     s->buf[s->len] = '\0';
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
-    ti_sync_scroll(ctx, node, NULL, &st.text);
+    textinput_sync_scroll(ctx, node, NULL, &st.text);
     mu_layout_mark_dirty(node);
     return true;
 }
 
-static void ti_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
+static void textinput_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
-    MuTextInState *s = ti_state(node);
+    MuTextInState *s = textinput_state(node);
     const char *text = s ? s->buf : "";
     bool focused = (node->flags & MU_NODE_FOCUSED) != 0;
     MuColor border = focused ? st.foreground : st.border;
     float border_w = focused ? 2.f : 1.f;
     mu_draw_rect(rc, node->bounds, st.background, border, border_w, 6.f);
 
-    float pad = 10.f;
+    float pad = MU_TEXTINPUT_PAD_X;
     MuRect clip = {node->bounds.x + pad, node->bounds.y, node->bounds.w - pad * 2.f, node->bounds.h};
     if (clip.w < 0.f) clip.w = 0.f;
     mu_push_scissor(rc, clip);
@@ -250,29 +344,29 @@ static void ti_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
             MuRect caret = {tx + cm.width, ty, 2.f, line_h};
             mu_draw_rect(rc, caret, st.foreground, (MuColor){0, 0, 0, 0}, 0.f, 0.f);
         }
-        ti_sync_scroll(ctx, node, rc, &st.text);
+        textinput_sync_scroll(ctx, node, rc, &st.text);
     }
 
     mu_pop_scissor(rc);
 }
 
 const MuNodeOps mu_textinput_node_ops = {
-    .destroy_state = ti_destroy,
-    .measure = ti_measure,
+    .destroy_state = textinput_destroy,
+    .measure = textinput_measure,
     .layout_children = NULL,
-    .paint = ti_paint,
+    .paint = textinput_paint,
     .hit_test = NULL,
-    .on_pointer = ti_ptr,
-    .on_key = ti_key,
-    .on_char = ti_char,
+    .on_pointer = textinput_ptr,
+    .on_key = textinput_key,
+    .on_char = textinput_char,
 };
 
 void mu_textinput_insert_utf8(MuContext *ctx, MuNode *input, const char *utf8) {
-    MuTextInState *s = ti_state(input);
+    MuTextInState *s = textinput_state(input);
     if (!s || !utf8 || !utf8[0]) return;
     int slen = (int)strlen(utf8);
     if (slen <= 0 || s->len + slen >= MU_TEXTINPUT_CAP - 1) return;
-    ti_clamp_cursor(s);
+    textinput_clamp_cursor(s);
     memmove(&s->buf[s->cursor + slen], &s->buf[s->cursor], (size_t)(s->len - s->cursor + 1));
     memcpy(&s->buf[s->cursor], utf8, (size_t)slen);
     s->len += slen;
@@ -281,7 +375,7 @@ void mu_textinput_insert_utf8(MuContext *ctx, MuNode *input, const char *utf8) {
     if (ctx && input) {
         MuStyleSnapshot st;
         mu_style_resolve(ctx, input, &st);
-        ti_sync_scroll(ctx, input, NULL, &st.text);
+        textinput_sync_scroll(ctx, input, NULL, &st.text);
     }
     mu_layout_mark_dirty(input);
 }
@@ -292,7 +386,7 @@ const char *mu_textinput_get_text(const MuNode *input) {
 }
 
 void mu_textinput_set_text(MuNode *input, const char *text) {
-    MuTextInState *s = ti_state(input);
+    MuTextInState *s = textinput_state(input);
     if (!s) return;
     const char *src = text ? text : "";
     strncpy(s->buf, src, MU_TEXTINPUT_CAP - 1);
@@ -304,7 +398,7 @@ void mu_textinput_set_text(MuNode *input, const char *text) {
 }
 
 void mu_textinput_set_placeholder(MuNode *input, const char *placeholder) {
-    MuTextInState *s = ti_state(input);
+    MuTextInState *s = textinput_state(input);
     if (!s) return;
     const char *src = placeholder ? placeholder : "";
     strncpy(s->placeholder, src, MU_TEXTINPUT_PLACEHOLDER_LEN - 1);

@@ -10,7 +10,7 @@
 #include <string.h>
 
 /* Context bound for metric queries made during layout, where no rc is threaded through
- * (see mu_render_bind_measure). Also backs mu_raylib_ui_font(). */
+ * (see mu_render_bind_measure). */
 static MuRenderContext *g_mu_measure_rc;
 
 void mu_render_bind_measure(MuRenderContext *rc) {
@@ -68,11 +68,6 @@ void mu_render_shutdown(MuRenderContext *rc) {
     rc->image_count = 0;
     rc->font_loaded = false;
     rc->font = GetFontDefault();
-}
-
-Font mu_raylib_ui_font(void) {
-    MuRenderContext *rc = g_mu_measure_rc;
-    return rc ? rc->fonts[0].font : GetFontDefault();
 }
 
 void mu_render_set_font(MuRenderContext *rc, Font font, bool take_ownership) {
@@ -210,13 +205,57 @@ void mu_text_measure(MuRenderContext *rc, const char *text, const MuTextStyle *s
     out->height = sz.y;
 }
 
-void mu_render_begin(MuRenderContext *rc) {
-    (void)rc;
+void mu_draw_backdrop_blur(MuRenderContext *rc, MuRect area, float blur_radius, MuColor tint,
+                           float corner_radius) {
+    /* Degraded: a flat tint, no blur.
+     *
+     * Real backdrop blur needs to read what has already been drawn. Under raylib that
+     * means LoadImageFromScreen (a full pipeline stall every frame) or restructuring the
+     * app around a RenderTexture2D and a blur shader. Neither belongs behind a call that
+     * looks this cheap, so this path deliberately approximates rather than pretending.
+     * The software backend does the real thing. */
+    (void)blur_radius;
+    if (!rc) return;
+    if (tint.a == 0) return;
+    mu_draw_rect(rc, area, tint, (MuColor){0, 0, 0, 0}, 0.f, corner_radius);
 }
 
-void mu_render_end(MuRenderContext *rc) {
+/* No cache: the blur above is one flat rect, so replaying it would cost more than drawing
+ * it, and there is no host-readable surface to snapshot in any case. Reporting a
+ * permanent miss keeps callers on the single correct path. */
+bool mu_backdrop_cache_try(MuRenderContext *rc, const MuNode *node, MuRect area, float blur_radius,
+                           MuColor tint, float corner_radius) {
     (void)rc;
-    while (rc->scissor_depth > 0) mu_pop_scissor(rc);
+    (void)node;
+    (void)area;
+    (void)blur_radius;
+    (void)tint;
+    (void)corner_radius;
+    return false;
+}
+
+void mu_backdrop_cache_store(MuRenderContext *rc, const MuNode *node, MuRect area, float blur_radius,
+                             MuColor tint, float corner_radius) {
+    (void)rc;
+    (void)node;
+    (void)area;
+    (void)blur_radius;
+    (void)tint;
+    (void)corner_radius;
+}
+
+void mu_backdrop_cache_drop(MuRenderContext *rc, const MuNode *node) {
+    (void)rc;
+    (void)node;
+}
+
+const void *mu_present_pixel_data(MuRenderContext *rc, int *out_w, int *out_h, int *out_row_bytes) {
+    /* Raylib presents through the GPU; there is no host-readable frame buffer to blit. */
+    (void)rc;
+    if (out_w) *out_w = 0;
+    if (out_h) *out_h = 0;
+    if (out_row_bytes) *out_row_bytes = 0;
+    return NULL;
 }
 
 void mu_push_scissor(MuRenderContext *rc, MuRect r) {

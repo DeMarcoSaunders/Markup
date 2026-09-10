@@ -37,6 +37,10 @@ struct MuStyleModule {
     MuColor checkbox_border, checkbox_fill;
     MuColor modal_overlay;
     MuColor modal_bg;
+    /* Frosted panels. Both are translucent by design — the blurred backdrop shows through
+     * them, and an opaque colour here would defeat the effect. */
+    MuColor glass_bg;
+    MuColor glass_border;
     float default_font_size;
     int default_font_weight;
     float default_letter_spacing;

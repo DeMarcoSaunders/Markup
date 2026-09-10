@@ -7,9 +7,33 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * Tab strip with a single visible pane.
+ *
+ * A tabs node owns two children: a horizontal bar of button nodes, and a stack of panes.
+ * Exactly one pane carries MU_NODE_VISIBLE; switching tabs flips that flag rather than
+ * rebuilding the tree, so pane state (scroll offsets, text input contents) survives.
+ *
+ * Selection lives only in MuTabsState.sel. tabs_update_styles then drives the bar's
+ * appearance from it by assigning each button a role ("tab" vs "tab_active"), so the
+ * theme decides how a selected tab looks — this file never picks colours. The active
+ * underline in tabs_paint_overlay is the one exception, drawn after children so it sits
+ * above the pane's clipped content.
+ *
+ * Capacity is fixed at MU_TABS_MAX with labels copied into fixed buffers, so callers may
+ * pass stack strings; mu_tabs_add silently refuses past the limit.
+ */
+
 #define MU_TABS_MAX 16
 #define MU_TABS_LABEL_LEN 64
 #define MU_TABS_BAR_HEIGHT 36.f
+#define MU_TABS_TAB_PAD_V 8.f
+#define MU_TABS_TAB_PAD_H 16.f
+#define MU_TABS_BODY_PADDING 12.f
+#define MU_TABS_GAP 8.f
+/* Active-tab underline: inset from each edge of the tab, and its thickness. */
+#define MU_TABS_INDICATOR_INSET 8.f
+#define MU_TABS_INDICATOR_HEIGHT 2.f
 
 typedef struct MuTabsState {
     MuContext *ctx;
@@ -151,7 +175,8 @@ static void tabs_paint_overlay(MuContext *ctx, MuNode *node, MuRenderContext *rc
 
     MuColor accent = ctx->style ? ctx->style->button_bg : (MuColor){59, 130, 246, 255};
     MuRect tab = s->bar_items[s->sel]->bounds;
-    MuRect indicator = {tab.x + 8.f, tab.y + tab.h - 2.f, tab.w - 16.f, 2.f};
+    MuRect indicator = {tab.x + MU_TABS_INDICATOR_INSET, tab.y + tab.h - MU_TABS_INDICATOR_HEIGHT,
+                        tab.w - 2.f * MU_TABS_INDICATOR_INSET, MU_TABS_INDICATOR_HEIGHT};
     if (indicator.w < 4.f) indicator.w = 4.f;
     mu_draw_rect(rc, indicator, accent, accent, 0.f, 1.f);
 }
@@ -234,8 +259,8 @@ MuNode *mu_make_tabs(MuContext *ctx) {
     mu_layout_set_gap(bar, 0.f);
     mu_layout_set_padding_all(bar, 0.f);
     mu_layout_set_align_items(bar, MU_ALIGN_STRETCH);
-    mu_layout_set_padding(body, 12.f, 12.f, 12.f, 12.f);
-    mu_layout_set_gap(body, 8.f);
+    mu_layout_set_padding_all(body, MU_TABS_BODY_PADDING);
+    mu_layout_set_gap(body, MU_TABS_GAP);
 
     s->bar = bar;
     s->body = body;
@@ -264,7 +289,8 @@ MuNode *mu_tabs_add(MuContext *ctx, MuNode *tabs, const char *label) {
 
     MuNode *tab = mu_make_panel(ctx, false);
     tab->role = "tab";
-    mu_layout_set_padding(tab, 8.f, 16.f, 8.f, 16.f);
+    mu_layout_set_padding(tab, MU_TABS_TAB_PAD_V, MU_TABS_TAB_PAD_H, MU_TABS_TAB_PAD_V,
+                          MU_TABS_TAB_PAD_H);
     mu_layout_set_min_size(tab, 0.f, MU_TABS_BAR_HEIGHT);
     mu_layout_set_align_self(tab, MU_ALIGN_STRETCH);
     mu_panel_set_on_click(tab, tabs_pick, &s->picks[i]);
@@ -276,7 +302,7 @@ MuNode *mu_tabs_add(MuContext *ctx, MuNode *tabs, const char *label) {
     MuNode *pane = mu_make_panel(ctx, true);
     pane->role = "group";
     mu_layout_set_padding_all(pane, 0.f);
-    mu_layout_set_gap(pane, 8.f);
+    mu_layout_set_gap(pane, MU_TABS_GAP);
     mu_layout_set_align_items(pane, MU_ALIGN_STRETCH);
     pane->flags &= ~MU_NODE_VISIBLE;
 

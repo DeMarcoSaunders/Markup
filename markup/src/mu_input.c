@@ -189,8 +189,3 @@ void mu_input_dispatch_char(MuContext *ctx, unsigned int codepoint) {
     const MuNodeOps *ops = mu_get_node_ops(ctx, f->kind);
     if (ops && ops->on_char) ops->on_char(ctx, f, codepoint);
 }
-
-void mu_input_dispatch_text(MuContext *ctx, const MuTextEvent *ev) {
-    if (!ctx || !ev) return;
-    mu_input_dispatch_char(ctx, ev->codepoint);
-}

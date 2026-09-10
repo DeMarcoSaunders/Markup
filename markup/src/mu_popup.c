@@ -7,6 +7,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * Floating popups (dropdown menus, context menus).
+ *
+ * Popups do not live in the main tree. They are children of ctx->popup_layer, which is
+ * painted after the root and before the modal layer, and hit-tested first — that is what
+ * lets a menu overlap and capture clicks from whatever is beneath it.
+ *
+ * A popup tracks its anchor by node id, not pointer, so the anchor can be rebuilt or
+ * destroyed without leaving a dangling reference. mu_popups_sync resolves ids to nodes
+ * once per frame and positions each open popup against its anchor's current bounds,
+ * clamping to stay MU_POPUP_SCREEN_MARGIN inside the root; a popup whose anchor has
+ * disappeared is closed rather than left floating.
+ *
+ * Only one popup is open at a time (ctx->active_popup_id). Opening one closes the other.
+ */
+
+/* Minimum width, and how far a popup is kept clear of the root's edges when clamped. */
+#define MU_POPUP_MIN_WIDTH 80.f
+#define MU_POPUP_SCREEN_MARGIN 8.f
+
 typedef struct MuPopupState {
     bool open;
     uint32_t anchor_id;
@@ -158,7 +178,7 @@ MuNode *mu_make_popup(MuContext *ctx) {
     popup->flags &= ~MU_NODE_VISIBLE;
     popup->flags |= MU_NODE_CLIP_CHILDREN;
     mu_layout_set_padding_all(popup, 0.f);
-    mu_layout_set_min_size(popup, 80.f, 0.f);
+    mu_layout_set_min_size(popup, MU_POPUP_MIN_WIDTH, 0.f);
 
     if (ctx->popup_layer) mu_node_add_child(ctx, ctx->popup_layer, popup);
     return popup;
@@ -262,7 +282,7 @@ void mu_popups_sync(MuContext *ctx) {
     float pw = measured.x + fl->padding_left + fl->padding_right;
     float ph = measured.y + fl->padding_top + fl->padding_bottom;
     if (pw < anchor_w) pw = anchor_w;
-    if (pw < 80.f) pw = 80.f;
+    if (pw < MU_POPUP_MIN_WIDTH) pw = MU_POPUP_MIN_WIDTH;
 
     float gap = 4.f;
     float x = anchor->bounds.x;
@@ -274,10 +294,10 @@ void mu_popups_sync(MuContext *ctx) {
     }
     if (place == MU_POPUP_ABOVE) y = anchor->bounds.y - ph - gap;
 
-    if (x + pw > root.x + root.w - 8.f) x = root.x + root.w - 8.f - pw;
-    if (x < root.x + 8.f) x = root.x + 8.f;
-    if (y + ph > root.y + root.h - 8.f) y = root.y + root.h - 8.f - ph;
-    if (y < root.y + 8.f) y = root.y + 8.f;
+    if (x + pw > root.x + root.w - MU_POPUP_SCREEN_MARGIN) x = root.x + root.w - MU_POPUP_SCREEN_MARGIN - pw;
+    if (x < root.x + MU_POPUP_SCREEN_MARGIN) x = root.x + MU_POPUP_SCREEN_MARGIN;
+    if (y + ph > root.y + root.h - MU_POPUP_SCREEN_MARGIN) y = root.y + root.h - MU_POPUP_SCREEN_MARGIN - ph;
+    if (y < root.y + MU_POPUP_SCREEN_MARGIN) y = root.y + MU_POPUP_SCREEN_MARGIN;
 
     mu_node_set_bounds(popup, (MuRect){x, y, pw, ph});
     popup_layout_children(ctx, popup);
