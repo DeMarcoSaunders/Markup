@@ -1,5 +1,6 @@
 #include "../include/markup/mu_render.h"
 #include "../include/markup/mu_text.h"
+#include <stdio.h> /* snprintf -- MSVC accepts it undeclared, clang does not */
 #include <string.h>
 
 static float text_line_height(MuRenderContext *rc, const MuTextStyle *style) {

@@ -1,6 +1,6 @@
 #include "../include/markup/mu_skia.h"
 #include "../include/markup/mu_image.h"
-#include "../include/markup/mu_render.h"
+#include "../include/markup/mu_path.h"
 #include "../include/markup/mu_text.h"
 
 static MuRenderContext *g_mu_measure_rc;
@@ -26,6 +26,7 @@ static MuRenderContext *measure_rc(MuRenderContext *rc) {
 #include "core/SkImageInfo.h"
 #include "core/SkPaint.h"
 #include "core/SkPixmap.h"
+#include "core/SkPath.h"
 #include "core/SkRRect.h"
 #include "core/SkRect.h"
 #include "core/SkString.h"
@@ -373,6 +374,14 @@ extern "C" const void *mu_present_pixel_data(MuRenderContext *rc, int *out_w, in
     return mu_skia_pixel_data(rc, out_w, out_h, out_row_bytes);
 }
 
+extern "C" void mu_render_logical_size(MuRenderContext *rc, int *out_w, int *out_h) {
+    /* No scaling on this backend: logical units are pixels. */
+    int w = 0, h = 0, row_bytes = 0;
+    mu_skia_pixel_data(rc, &w, &h, &row_bytes);
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
+}
+
 extern "C" void mu_draw_backdrop_blur(MuRenderContext *rc, MuRect area, float blur_radius, MuColor tint,
                                       float corner_radius) {
     /* Degraded: a flat tint, no blur.
@@ -490,6 +499,55 @@ extern "C" void mu_draw_rect(MuRenderContext *rc, MuRect r, MuColor fill, MuColo
         } else {
             canvas->drawRect(rect, stroke);
         }
+    }
+}
+
+extern "C" void mu_draw_path(MuRenderContext *rc, const MuPath *path, const MuDrawPathOpts *opts) {
+    SkCanvas *canvas = canvas_of(rc);
+    if (!canvas || !path) return;
+
+    MuDrawPathOpts defaults;
+    if (!opts) {
+        mu_draw_path_opts_init(&defaults);
+        opts = &defaults;
+    }
+
+    SkPath sk;
+    float sub_x = 0.f, sub_y = 0.f;
+    bool have_sub = false;
+
+    for (int i = 0; i < path->count; i++) {
+        switch (path->cmds[i]) {
+        case MU_PATH_MOVE:
+            sk.moveTo(path->xs[i], path->ys[i]);
+            sub_x = path->xs[i];
+            sub_y = path->ys[i];
+            have_sub = true;
+            break;
+        case MU_PATH_LINE:
+            sk.lineTo(path->xs[i], path->ys[i]);
+            break;
+        case MU_PATH_CLOSE:
+            if (have_sub) sk.close();
+            break;
+        }
+    }
+
+    if (opts->fill.a > 0) {
+        SkPaint fill;
+        fill.setAntiAlias(true);
+        fill.setStyle(SkPaint::kFill_Style);
+        fill.setColor(mu_to_sk(opts->fill));
+        canvas->drawPath(sk, fill);
+    }
+
+    if (opts->stroke.a > 0 && opts->stroke_width > 0.f) {
+        SkPaint stroke;
+        stroke.setAntiAlias(true);
+        stroke.setStyle(SkPaint::kStroke_Style);
+        stroke.setStrokeWidth(opts->stroke_width);
+        stroke.setColor(mu_to_sk(opts->stroke));
+        canvas->drawPath(sk, stroke);
     }
 }
 

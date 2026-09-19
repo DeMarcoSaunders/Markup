@@ -4,6 +4,7 @@
 #include "mu_core.h"
 #include "mu_image.h"
 #include "mu_style.h"
+#include "mu_path.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -100,6 +101,17 @@ void mu_paint_damaged(MuContext *ctx, MuRenderContext *rc);
  * GPU backends that present directly return NULL. Lets host harnesses (mu_sdl, and later
  * a framebuffer target) drive any backend without naming one. */
 const void *mu_present_pixel_data(MuRenderContext *rc, int *out_w, int *out_h, int *out_row_bytes);
+
+/**
+ * The surface's size in the units a caller draws in.
+ *
+ * The same as the pixel size on every backend except a scaled software surface
+ * (`mu_soft_set_scale`), where it is the pixel size divided by that scale. Chrome
+ * that anchors to an edge — a status bar, a footer hint — must ask for this
+ * rather than for the pixel size, or it lands off-screen the moment a caller
+ * draws into a dense display's framebuffer.
+ */
+void mu_render_logical_size(MuRenderContext *rc, int *out_w, int *out_h);
 
 #ifdef __cplusplus
 }

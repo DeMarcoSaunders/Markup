@@ -228,6 +228,19 @@ void mu_draw_backdrop_blur(MuRenderContext *rc, MuRect area, float blur_radius, 
     if (!rc || !rc->pixels) return;
     if (area.w <= 0.f || area.h <= 0.f) return;
     if (blur_radius < 0.f) blur_radius = 0.f;
+    {
+        /* The blur reach scales with everything else: a 20-unit blur on a 2x
+         * surface must cover 40 pixels, or the glass is visibly tighter there. */
+        float ui = mu_soft_scale(rc);
+        if (ui != 1.f) {
+            area.x *= ui;
+            area.y *= ui;
+            area.w *= ui;
+            area.h *= ui;
+            blur_radius *= ui;
+            corner_radius *= ui;
+        }
+    }
 
     /* Where we are allowed to write. */
     int wx0, wy0, wx1, wy1;

@@ -65,14 +65,14 @@ endif()
 add_library(markup_input STATIC markup/src/mu_input.c)
 target_link_libraries(markup_input PUBLIC markup_core)
 
-add_library(markup_paint STATIC markup/src/mu_paint.c markup/src/mu_image_util.c markup/src/mu_image_decode.c)
+add_library(markup_paint STATIC markup/src/mu_paint.c markup/src/mu_image_util.c markup/src/mu_image_decode.c markup/src/mu_path.c markup/src/mu_path_raster.c)
 target_link_libraries(markup_paint PUBLIC markup_core)
 # Decoding is stb_image (vendored), so there is no libpng to find. That dependency used
 # to be optional, which meant image loading silently did nothing wherever it was absent.
 
 # Software rasterizer backend. No external dependencies by design — this is the path to
 # bare-metal and non-desktop targets, so it always builds.
-add_library(markup_soft STATIC markup/src/mu_soft.c markup/src/mu_soft_text.c markup/src/mu_soft_blur.c)
+add_library(markup_soft STATIC markup/src/mu_soft.c markup/src/mu_soft_text.c markup/src/mu_soft_blur.c markup/src/mu_soft_path.c)
 # markup_style supplies mu_text_style_init and the backend-neutral wrapping built on
 # mu_text_measure; the two reference each other, which static libs resolve fine.
 target_link_libraries(markup_soft PUBLIC markup_core markup_paint markup_style)

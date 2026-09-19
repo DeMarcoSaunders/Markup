@@ -354,6 +354,12 @@ void mu_text_measure(MuRenderContext *rc, const char *text, const MuTextStyle *s
         estimate_metrics(text, size, spacing, out);
         return;
     }
+    /* Measured in logical units on purpose: callers fit text into logical boxes,
+     * so a scaled surface must not report widths in physical pixels. Measuring
+     * at the physical size and dividing back keeps the answer consistent with
+     * what mu_draw_text will actually put on the surface. */
+    const float ui_scale = mu_soft_scale(rc);
+    size *= ui_scale;
 
     float scale = stbtt_ScaleForPixelHeight(&font->info, size);
     int ascent = 0, descent = 0, line_gap = 0;
@@ -379,6 +385,11 @@ void mu_text_measure(MuRenderContext *rc, const char *text, const MuTextStyle *s
     if (style->weight >= MU_TEXT_WEIGHT_BOLD) x += 1.f;
     if (style->italic > 0) x += 2.f;
     out->width = x;
+
+    if (ui_scale != 1.f) {
+        out->width /= ui_scale;
+        out->height /= ui_scale;
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -422,6 +433,17 @@ void mu_draw_text(MuRenderContext *rc, const char *text, float x, float y, const
     MuTextStyle storage;
     style_defaults(&style, &storage);
     float size = style->size > 0.f ? style->size : 16.f;
+    /* Glyphs are rasterized at the physical size, not magnified afterwards:
+     * that is the difference between text that stays sharp on a dense display
+     * and text that looks like a screenshot of itself. */
+    {
+        float ui = mu_soft_scale(rc);
+        if (ui != 1.f) {
+            x *= ui;
+            y *= ui;
+            size *= ui;
+        }
+    }
     float spacing = style->letter_spacing >= 0.f ? style->letter_spacing : 1.f;
 
     MuSoftTextState *ts = text_of(rc);

@@ -6,6 +6,7 @@
  */
 
 #include "markup/mu_soft.h"
+#include "markup/mu_path.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -374,6 +375,124 @@ static void test_borrowed_surface(void) {
     free(fb);
 }
 
+/*
+ * A scaled surface draws the same picture, bigger.
+ *
+ * The point of mu_soft_set_scale is that a caller keeps working in logical
+ * units on a dense display. So the assertion is a correspondence: a rect drawn
+ * at scale 2 must cover exactly the pixels its 1x twin covers, doubled -- and
+ * must stop where the doubled rect stops, since an off-by-one in the transform
+ * shows up first at the far edge.
+ */
+static void test_scale_doubles_geometry(void) {
+    CASE("scale doubles geometry");
+    const int w = 40, h = 20;
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, w, h);
+    CHECK(mu_soft_scale(&rc) == 1.f); /* default: pixels are logical units */
+
+    mu_soft_set_scale(&rc, 2.f);
+    CHECK(mu_soft_scale(&rc) == 2.f);
+    int lw = 0, lh = 0;
+    mu_render_logical_size(&rc, &lw, &lh);
+    CHECK(lw == w / 2);
+    CHECK(lh == h / 2);
+
+    mu_soft_begin_frame(&rc, GREEN);
+    mu_draw_rect(&rc, (MuRect){2.f, 3.f, 6.f, 4.f}, RED, (MuColor){0, 0, 0, 0}, 0.f, 0.f);
+
+    /* Inside the doubled box (4,6)..(16,14), and just outside each far edge. */
+    check_pixel(&rc, 4, 6, RED);
+    check_pixel(&rc, 15, 13, RED);
+    check_pixel(&rc, 16, 13, GREEN);
+    check_pixel(&rc, 15, 14, GREEN);
+    check_pixel(&rc, 3, 6, GREEN);
+    check_pixel(&rc, 4, 5, GREEN);
+    mu_soft_render_shutdown(&rc);
+}
+
+/* A scale below 0.1 is refused rather than applied: zero would collapse every
+ * draw to a point, and a caller that computed one from a bad framebuffer size
+ * should keep the surface it had. */
+static void test_scale_rejects_nonsense(void) {
+    CASE("scale rejects nonsense");
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, 8, 8);
+    mu_soft_set_scale(&rc, 3.f);
+    mu_soft_set_scale(&rc, 0.f);
+    CHECK(mu_soft_scale(&rc) == 3.f);
+    mu_soft_set_scale(&rc, -2.f);
+    CHECK(mu_soft_scale(&rc) == 3.f);
+    mu_soft_render_shutdown(&rc);
+}
+
+/* The clip stack is in logical units too. Without this a scaled caller would
+ * clip to a quarter of the box it asked for, and the symptom -- content cut off
+ * on the right and bottom -- looks like a layout bug, not a scissor one. */
+static void test_scale_applies_to_scissor(void) {
+    CASE("scale applies to the scissor");
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, 20, 20);
+    mu_soft_set_scale(&rc, 2.f);
+    mu_soft_begin_frame(&rc, GREEN);
+    mu_push_scissor(&rc, (MuRect){0.f, 0.f, 5.f, 5.f}); /* 10x10 physical */
+    mu_draw_rect(&rc, (MuRect){0.f, 0.f, 10.f, 10.f}, RED, (MuColor){0, 0, 0, 0}, 0.f, 0.f);
+    mu_pop_scissor(&rc);
+
+    check_pixel(&rc, 9, 9, RED);
+    check_pixel(&rc, 10, 9, GREEN);
+    check_pixel(&rc, 9, 10, GREEN);
+    mu_soft_render_shutdown(&rc);
+}
+
+static void test_path_filled_triangle(void) {
+    CASE("path filled triangle");
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, 32, 32);
+    mu_soft_begin_frame(&rc, BLACK);
+
+    MuPath path;
+    mu_path_init(&path);
+    mu_path_move_to(&path, 16.f, 4.f);
+    mu_path_line_to(&path, 28.f, 26.f);
+    mu_path_line_to(&path, 4.f, 26.f);
+    mu_path_close(&path);
+
+    MuDrawPathOpts opts;
+    mu_draw_path_opts_init(&opts);
+    opts.fill = RED;
+    mu_draw_path(&rc, &path, &opts);
+
+    check_pixel(&rc, 16, 14, RED);
+    check_pixel(&rc, 4, 26, BLACK);
+    check_pixel(&rc, 28, 26, BLACK);
+
+    mu_soft_render_shutdown(&rc);
+}
+
+static void test_path_stroke(void) {
+    CASE("path stroke");
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, 32, 32);
+    mu_soft_begin_frame(&rc, BLACK);
+
+    MuPath path;
+    mu_path_init(&path);
+    mu_path_move_to(&path, 4.f, 16.f);
+    mu_path_line_to(&path, 28.f, 16.f);
+
+    MuDrawPathOpts opts;
+    mu_draw_path_opts_init(&opts);
+    opts.stroke = GREEN;
+    opts.stroke_width = 2.f;
+    mu_draw_path(&rc, &path, &opts);
+
+    check_pixel(&rc, 16, 16, GREEN);
+    check_pixel(&rc, 16, 14, BLACK);
+
+    mu_soft_render_shutdown(&rc);
+}
+
 int main(void) {
     test_pack_roundtrip();
     test_opaque_fill_bounds();
@@ -391,6 +510,11 @@ int main(void) {
     test_square_path_stays_crisp();
     test_present_hook();
     test_borrowed_surface();
+    test_scale_doubles_geometry();
+    test_scale_rejects_nonsense();
+    test_scale_applies_to_scissor();
+    test_path_filled_triangle();
+    test_path_stroke();
 
     if (g_failures) {
         printf("\n%d check(s) failed\n", g_failures);

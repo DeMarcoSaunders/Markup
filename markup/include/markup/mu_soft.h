@@ -63,6 +63,20 @@ struct MuRenderContext {
     int stride; /* pixels per row, not bytes */
     bool owns_pixels;
 
+    /*
+     * Physical pixels per logical unit; 1 unless a caller sets it.
+     *
+     * Callers draw in logical units and the backend multiplies on the way in:
+     * positions, sizes, corner radii, blur reach, and the size a glyph is
+     * rasterized at. Text is therefore rendered at the physical size rather
+     * than magnified afterwards, which is the reason this lives here instead of
+     * in an upscaling blit.
+     *
+     * Measurement stays logical — mu_text_measure divides back out — so layout
+     * written against a 1.0 surface keeps working unchanged.
+     */
+    float scale;
+
     /* Clip stack. Depth 0 means "whole surface". Pushes beyond MU_SOFT_CLIP_MAX are
      * counted in scissor_overflow so push/pop stay balanced instead of desynchronising. */
     MuSoftClip clip[MU_SOFT_CLIP_MAX];
@@ -96,6 +110,17 @@ void mu_soft_render_init(MuRenderContext *rc, int width, int height);
 
 /** Render into caller-owned memory (a framebuffer). stride is in pixels, not bytes. */
 void mu_soft_render_init_borrowed(MuRenderContext *rc, uint32_t *pixels, int width, int height, int stride);
+
+/**
+ * Physical pixels per logical unit, for a dense display: 2 on a surface whose
+ * pixels are half the size the layout assumes. Values below 0.1 are ignored.
+ *
+ * Set it once after init. Everything drawn afterwards is in logical units — the
+ * surface behaves as though it were `mu_render_logical_size()` across, while
+ * glyphs and edges still rasterize at full physical resolution.
+ */
+void mu_soft_set_scale(MuRenderContext *rc, float scale);
+float mu_soft_scale(const MuRenderContext *rc);
 
 void mu_soft_render_shutdown(MuRenderContext *rc);
 

@@ -23,8 +23,40 @@ MuSoftClip mu_soft_clip_now(const MuRenderContext *rc) {
     return full;
 }
 
+/* ---------------------------------------------------------------------------
+ * Logical units
+ *
+ * One multiply at each entry point, so every primitive below keeps working in
+ * physical pixels and nothing downstream has to know a scale exists. A context
+ * zeroed by an older caller reads scale 0, which means 1 here rather than a
+ * surface that draws nothing.
+ * ------------------------------------------------------------------------ */
+
+float mu_soft_scale(const MuRenderContext *rc) {
+    return (rc && rc->scale > 0.f) ? rc->scale : 1.f;
+}
+
+void mu_soft_set_scale(MuRenderContext *rc, float scale) {
+    if (!rc || !(scale >= 0.1f)) return;
+    rc->scale = scale;
+}
+
+void mu_render_logical_size(MuRenderContext *rc, int *out_w, int *out_h) {
+    float s = mu_soft_scale(rc);
+    if (out_w) *out_w = rc ? (int)((float)rc->width / s + 0.5f) : 0;
+    if (out_h) *out_h = rc ? (int)((float)rc->height / s + 0.5f) : 0;
+}
+
+static MuRect mu_soft_scaled_rect(const MuRenderContext *rc, MuRect r) {
+    float s = mu_soft_scale(rc);
+    if (s == 1.f) return r;
+    MuRect out = {r.x * s, r.y * s, r.w * s, r.h * s};
+    return out;
+}
+
 void mu_push_scissor(MuRenderContext *rc, MuRect r) {
     if (!rc) return;
+    r = mu_soft_scaled_rect(rc, r);
     if (rc->scissor_depth >= MU_SOFT_CLIP_MAX) {
         rc->scissor_overflow++; /* keep pop balanced rather than silently narrowing */
         return;
@@ -294,6 +326,7 @@ void mu_soft_render_init(MuRenderContext *rc, int width, int height) {
     rc->width = width;
     rc->height = height;
     rc->stride = width;
+    rc->scale = 1.f;
     rc->owns_pixels = true;
     rc->image_count = 1; /* slot 0 is MU_IMAGE_INVALID */
     mu_soft_text_init(rc);
@@ -307,6 +340,7 @@ void mu_soft_render_init_borrowed(MuRenderContext *rc, uint32_t *pixels, int wid
     rc->width = width;
     rc->height = height;
     rc->stride = stride > 0 ? stride : width;
+    rc->scale = 1.f;
     rc->owns_pixels = false;
     rc->image_count = 1;
     mu_soft_text_init(rc);
@@ -404,6 +438,14 @@ void mu_draw_rect(MuRenderContext *rc, MuRect r, MuColor fill, MuColor border, f
     if (!rc || !rc->pixels) return;
     if (r.w <= 0.f || r.h <= 0.f) return;
     if (radius < 0.f) radius = 0.f;
+    {
+        float s = mu_soft_scale(rc);
+        if (s != 1.f) {
+            r = mu_soft_scaled_rect(rc, r);
+            border_w *= s;
+            radius *= s;
+        }
+    }
 
     /* Square corners stay on the snapped integer path: UI chrome (separators, overlays,
      * toolbars) reads as crisp rather than softened, and it avoids the SDF entirely. */
@@ -546,6 +588,7 @@ static void sample_bilinear_premul(const MuSoftImageSlot *img, const MuSampleBou
 
 void mu_draw_image(MuRenderContext *rc, uint32_t image_id, MuRect dst, const MuDrawImageOpts *opts) {
     if (!rc || !rc->pixels || dst.w < 1.f || dst.h < 1.f) return;
+    dst = mu_soft_scaled_rect(rc, dst);
     MuSoftImageSlot *img = soft_resolve_image(rc, image_id);
     if (!img) return;
 

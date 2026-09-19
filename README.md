@@ -112,7 +112,8 @@ See [Getting started](#getting-started) for a copy-pasteable loop snippet.
 
 - **Fonts:** Raylib uses **`Font`** via `mu_render_set_font`; Skia loads TTF with `mu_skia_set_font_file` / `mu_font_load_file`. Demos bundle **Inter** under **`apps/demo_minimal/assets/`**.
 - **Images:** `mu_image_load_file(&rc, path)` returns a texture id (`MU_IMAGE_INVALID` = 0). Decoding uses vendored **stb_image** in `markup_paint` — PNG, JPEG and BMP, no external dependency. `mu_image_decode_last_error()` reports why a load failed. Supports atlas slices via `mu_image_set_src_rect` and `MuImageSheet` grid helpers.
-- **Paths:** load from **`assets/`** next to the executable. Demos **`POST_BUILD` copy** `apps/demo_minimal/assets/` into the output folder. Use absolute fallbacks in dev if cwd differs (see `MARKUP_DEMO_FONT_FILE_ABS` in Skia demo).
+- **Asset paths:** load from **`assets/`** next to the executable. Demos **`POST_BUILD` copy** `apps/demo_minimal/assets/` into the output folder. Use absolute fallbacks in dev if cwd differs (see `MARKUP_DEMO_FONT_FILE_ABS` in Skia demo).
+- **Vector paths:** `mu_path_move_to` / `mu_path_line_to` / `mu_path_close` build a `MuPath`; `mu_draw_path(&rc, &path, &opts)` fills and/or strokes it (soft, Skia, Raylib). No curves yet — polylines only.
 
 ---
 

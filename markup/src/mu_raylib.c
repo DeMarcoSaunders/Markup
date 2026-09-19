@@ -3,7 +3,8 @@
 #include "../include/markup/mu_input.h"
 #include "../include/markup/mu_popup.h"
 #include "../include/markup/mu_widgets_basic.h"
-#include "../include/markup/mu_render.h"
+#include "mu_path_raster.h"
+#include "../include/markup/mu_path.h"
 #include "../include/markup/mu_text.h"
 #include <math.h>
 #include <stdio.h>
@@ -249,6 +250,12 @@ void mu_backdrop_cache_drop(MuRenderContext *rc, const MuNode *node) {
     (void)node;
 }
 
+void mu_render_logical_size(MuRenderContext *rc, int *out_w, int *out_h) {
+    /* No scaling on this backend: logical units are pixels. */
+    if (out_w) *out_w = rc ? rc->width : 0;
+    if (out_h) *out_h = rc ? rc->height : 0;
+}
+
 const void *mu_present_pixel_data(MuRenderContext *rc, int *out_w, int *out_h, int *out_row_bytes) {
     /* Raylib presents through the GPU; there is no host-readable frame buffer to blit. */
     (void)rc;
@@ -282,6 +289,29 @@ static void draw_rounded_rect(float x, float y, float w, float h, float radius_p
     if (roundness > 1.f)
         roundness = 1.f;
     DrawRectangleRounded((Rectangle){x, y, w, h}, roundness, 18, col);
+}
+
+static void raylib_path_span(void *ctx, int y, int x0, int x1, MuColor col, uint8_t coverage) {
+    (void)ctx;
+    if (x1 <= x0) return;
+    Color c = mu_to_ray(col);
+    if (coverage < 255) c.a = (unsigned char)((c.a * coverage) / 255);
+    DrawRectangle(x0, y, x1 - x0, 1, c);
+}
+
+void mu_draw_path(MuRenderContext *rc, const MuPath *path, const MuDrawPathOpts *opts) {
+    (void)rc;
+    if (!path) return;
+
+    MuDrawPathOpts defaults;
+    if (!opts) {
+        mu_draw_path_opts_init(&defaults);
+        opts = &defaults;
+    }
+
+    if (opts->fill.a > 0) mu_path_raster_fill_even_odd(path, raylib_path_span, NULL, opts->fill);
+    if (opts->stroke.a > 0 && opts->stroke_width > 0.f)
+        mu_path_raster_stroke(path, raylib_path_span, NULL, opts->stroke, opts->stroke_width);
 }
 
 void mu_draw_rect(MuRenderContext *rc, MuRect r, MuColor fill, MuColor border, float border_w, float radius) {
