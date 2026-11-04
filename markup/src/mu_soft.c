@@ -386,11 +386,8 @@ void mu_soft_resize(MuRenderContext *rc, int width, int height) {
     mu_soft_backdrop_cache_free_all(rc);
 }
 
-void mu_soft_begin_frame_rect(MuRenderContext *rc, MuColor clear, MuRect area) {
-    if (!rc || !rc->pixels) return;
-    rc->scissor_depth = 0;
-    rc->scissor_overflow = 0;
-
+/** Fill one rect, clipped to the surface. Assumes the clip stack is already reset. */
+static void soft_clear_rect(MuRenderContext *rc, uint32_t packed, MuRect area) {
     int x0 = (int)floorf(area.x), y0 = (int)floorf(area.y);
     int x1 = (int)ceilf(area.x + area.w), y1 = (int)ceilf(area.y + area.h);
     if (x0 < 0) x0 = 0;
@@ -399,11 +396,28 @@ void mu_soft_begin_frame_rect(MuRenderContext *rc, MuColor clear, MuRect area) {
     if (y1 > rc->height) y1 = rc->height;
     if (x1 <= x0 || y1 <= y0) return;
 
-    uint32_t packed = mu_soft_pack(clear);
     for (int y = y0; y < y1; y++) {
         uint32_t *row = rc->pixels + (size_t)y * (size_t)rc->stride;
         for (int x = x0; x < x1; x++) row[x] = packed;
     }
+}
+
+void mu_soft_begin_frame_rect(MuRenderContext *rc, MuColor clear, MuRect area) {
+    if (!rc || !rc->pixels) return;
+    rc->scissor_depth = 0;
+    rc->scissor_overflow = 0;
+    soft_clear_rect(rc, mu_soft_pack(clear), area);
+}
+
+void mu_soft_begin_frame_region(MuRenderContext *rc, MuColor clear, const MuRegion *region) {
+    if (!rc || !rc->pixels) return;
+    rc->scissor_depth = 0;
+    rc->scissor_overflow = 0;
+    if (!region) return;
+
+    /* The region's rects are disjoint, so each pixel is written at most once. */
+    uint32_t packed = mu_soft_pack(clear);
+    for (int i = 0; i < region->count; i++) soft_clear_rect(rc, packed, region->rects[i]);
 }
 
 void mu_soft_begin_frame(MuRenderContext *rc, MuColor clear) {

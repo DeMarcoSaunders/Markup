@@ -85,8 +85,9 @@ static bool frame(Fixture *f, float dt) {
     mu_damage_collect(&f->ctx);
     bool painted = !mu_damage_empty(&f->ctx);
     if (painted) {
-        MuRect area = mu_damage_rect(&f->ctx);
-        mu_soft_begin_frame_rect(&f->rc, (MuColor){20, 20, 24, 255}, area);
+        /* The region, not its bounding box -- clearing more than mu_paint_damaged
+         * repaints would leave holes of flat clear colour. */
+        mu_soft_begin_frame_region(&f->rc, (MuColor){20, 20, 24, 255}, mu_damage_region(&f->ctx));
         mu_paint_damaged(&f->ctx, &f->rc);
     }
     mu_damage_reset(&f->ctx);

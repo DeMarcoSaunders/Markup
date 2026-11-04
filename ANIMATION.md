@@ -12,11 +12,20 @@ nodes and can drive any value you like.
 
 **`MuAnimator`** holds four springs per node — one per edge of its bounds — and writes the
 result into `node->bounds` each frame, after which damage tracking discovers the move the
-same way it discovers a layout pass moving something.
+same way it discovers a layout pass moving something. It is for nodes whose position is
+yours: a card on the modal layer, a sheet, a popup.
+
+**Widget motion** is the third piece, for nodes layout owns: a node springs its own
+`paint_offset` from an `animate` op, which moves where it is *drawn* and nothing else.
+Buttons lift on hover and scroll views glide and rubber-band this way, built in and opt-in.
+
+`MuSpring` lives in `markup_core` (`markup/mu_spring.h`), so widgets can use it without
+linking `markup_anim`; `mu_anim.h` includes it, so nothing changes for animator users.
 
 - [Quick start](#quick-start)
 - [The spring](#the-spring)
 - [Animating node bounds](#animating-node-bounds)
+- [Widget motion](#widget-motion)
 - [Stepping](#stepping)
 - [Lifetime](#lifetime)
 - [Limitations](#limitations)
@@ -151,25 +160,18 @@ popup and modal layers, which `mu_layout_run` never walks — the same constrain
 reason. `apps/demo_soft/main.c` puts its card on the modal layer alongside the frosted-glass
 panel precisely so nothing else claims its bounds.
 
-### Animating a node layout still owns
+### Don't use it on nodes layout owns
 
-The modal/popup layer is the safe path because nothing else ever touches those bounds. A
-node layout genuinely owns — an ordinary flex child, like a button — can still be animated,
-but not by reading `node->bounds` as "the resting position" each frame: layout in this
-codebase is dirty-flag-gated (`mu_layout_node` bails out unless `MU_NODE_LAYOUT_DIRTY` is
-set), and `mu_anim_advance` writes bounds directly rather than through `mu_node_set_bounds`,
-so nothing re-dirties the node either. Once it has animated even once, `node->bounds` is
-wherever the spring last left it, not where flex would put it at rest — read it back as the
-base for a new target and each retarget lifts (or drops) it a little further than the last,
-forever, because the "resting" reference it launches from has already moved. It looks
-exactly like an animation that never finishes, because it is one.
+An ordinary flex child — a button, a list row — should not be animated through its bounds
+at all; use [widget motion](#widget-motion). Two separate things go wrong:
 
-Capture the resting rect once, before the node has ever animated, and compute every target
-from that stable copy — never from live `node->bounds` once animation may have touched it.
-`apps/demo_soft/main.c`'s hover-lift on the "Primary" button does exactly this: the resting
-rect is captured right after the first real layout pass (and again after any resize), and
-the per-frame target is always `rest`, or `rest` shifted up a few pixels while hovered —
-never a re-read of the node's current, possibly-mid-flight bounds.
+- **Hit testing follows bounds.** A button lifted by moving its bounds rises out from under
+  a pointer resting near its bottom edge, loses hover, falls back under the pointer, is
+  hovered again, and repeats. This is not hypothetical: `tests/test_anim.c` ablates it, and
+  with a bounds-based lift the hover drops on 88 of 120 frames and never settles.
+- **Bounds stop meaning "rest".** Layout is dirty-flag-gated, so once a node has animated,
+  `node->bounds` is wherever the spring left it. Reading it back as the base for the next
+  target lifts it again every frame — a runaway that never finishes.
 
 ### Keyed by id, not by pointer
 
@@ -183,6 +185,74 @@ raw `MuNode *` and requires `mu_physics_remove_body` before the node is freed �
 that step leaves physics writing into freed memory on its next advance. Animation cannot
 develop that bug; the cost is one linear id lookup per animated node per frame, which is the
 trade being made.
+
+---
+
+## Widget motion
+
+```c
+void mu_frame_set_dt(MuContext *ctx, float seconds);   /* once per frame, before collect */
+int  mu_animating(const MuContext *ctx);                 /* still moving after collect? */
+
+mu_button_set_hover_lift(&ctx, button, 4.f);           /* opt-in, per button */
+mu_scroll_set_spring(scroll, true);                    /* opt-in, per scroll view */
+```
+
+Every node has a `paint_offset`: where it and its subtree are **drawn**, relative to where
+layout put them. Layout, hit testing and input never see it. Painting shifts each node by
+its accumulated offset for the duration of its own paint and then restores the saved bounds
+by assignment — not by subtracting the offset back out, which is not exact in floating point
+and would drift a layout rect into permanent damage. Every widget and every backend already
+draws from `node->bounds`, so none of them needed to change.
+
+Damage tracking compares the *painted* rect (`prev_bounds` now records that), so a lifted
+button damages where it was drawn and where it is drawn, not where layout says it is.
+
+The motion itself comes from an optional node op:
+
+```c
+bool (*animate)(MuContext *ctx, MuNode *node, float dt);   /* in MuNodeOps */
+```
+
+`mu_damage_collect` calls it for each node **just before comparing that node** against last
+frame, so whatever it changes is damaged in the same frame. Stepping during paint instead
+(as a GPU toolkit that redraws everything can) would draw outside the region that was
+cleared, because paint here only covers what collect already reported. The op returns true
+while moving; `mu_animating` counts those, which is the signal to keep producing frames.
+Call `mu_damage_collect` once per frame — a second call steps the motion twice.
+
+With no clock — `mu_frame_set_dt` never called, or 0 — `mu_spring_follow` snaps to the
+target instead of stepping. Motion lands at once rather than waiting forever, so an app that
+never heard of any of this gets the end state and goes idle; it doubles as "reduce motion".
+
+The built-in uses:
+
+- **Button hover lift** springs `paint_offset.y` toward `-lift` while `MU_NODE_HOVERED`.
+- **Spring scrolling.** The content is drawn at `shown`, a spring that chases the real
+  offset; the content child's `paint_offset` is the difference. The real offset stays the
+  clamped truth that layout and hit testing use, so a wheel step changes it at once and
+  the content *glides* there. A push past an end that the clamp refused (see
+  `mu_scroll_get_excess`) is added to the spring's **velocity**, not its position: the
+  content travels out past the end over a few frames and comes back, with no jump at
+  either end. Resistance grows with the stretch, so repeated pushes cannot pull it out
+  without bound. The spring is critically damped, so a glide never wobbles past its line
+  and an overrun goes out and back once. The scrollbar thumb follows `shown` and squeezes
+  against an end it is pulled past. A dragged thumb is followed exactly, with no bounce.
+
+  An earlier version moved the drawn position straight to the stretched point instead,
+  which put the whole ~38px overrun on screen in the first frame — the visible jump this
+  design exists to avoid. `test_scroll_rubber_band` checks the overrun now builds over
+  several frames; putting the displacement back fails it.
+
+  The tradeoff: a row clicked mid-glide is the row at the real offset, which can be a
+  little away from where it is drawn for the few frames the glide lasts.
+
+A custom widget does the same: keep a `MuSpring` in its state, step it with
+`mu_spring_follow(&s->spring, target, dt)` in `animate`, and write `node->paint_offset`.
+
+One limit of the shift-per-node approach: a paint op that reads its *children's* bounds sees
+them at their layout positions, since each child is shifted only when the walk reaches it. No
+built-in widget does this.
 
 ---
 
@@ -226,15 +296,14 @@ was animating is always safe, for the reasons above — there is nothing to do o
 **Bounds only.** `MuAnimator` springs a node's `x`/`y`/`w`/`h` as one unit. Animating
 anything else — opacity, a color channel, a custom node's internal state — means using
 `MuSpring` directly and writing the result wherever it needs to go; nothing about it is
-tied to `MuRect`. Scroll rubber-banding in `apps/demo_soft/main.c` is a real instance: one
-`MuSpring` models a visual y-offset layered on top of a scroll view's already-clamped
-position, kicked whenever `mu_scroll_get_excess` reports that a wheel or thumb-drag tried
-to go further than the content allows. `markup_widgets_basic` has no idea this is
-happening — `mu_scroll_get_excess` is ordinary bookkeeping the clamp already had to do,
-not an animation hook, which is what lets a widget library stay free of a hard dependency
-on `markup_anim` while still supporting this from the outside. Same reasoning as the hover
-lift: the effect is real, but the widget that makes it possible doesn't need to know what
-`mu_anim` is.
+tied to `MuRect`. [Widget motion](#widget-motion) is exactly that: hover lift and
+rubber-banding are each a `MuSpring` driving a `paint_offset`.
+
+**Overrun after a long glide is absorbed.** A single huge scroll from the top straight
+past the bottom glides most of the way and the refused part of the push is swallowed by
+the glide's own deceleration, so there is no bounce at the end. That is the physics of a
+critically damped spring, and what you want: the bounce is for pushing at an end you are
+already at.
 
 **One shape per node.** All four edges share the `response`/`damping` passed to a given
 `mu_anim_to` call, and a node holds at most one entry, so there is no way to make width
@@ -252,6 +321,7 @@ actually has; not a data structure to reach for if that number grows into the th
 
 | | |
 |---|---|
-| `apps/demo_soft/main.c` | A card that springs to a new corner on click (modal layer), a button that lifts on hover (an ordinary flex child), and scroll rubber-banding at the content's limits |
-| `tests/test_anim.c` | The solver's three regimes, retargeting, id-safety, and two ablations |
-| `markup/include/markup/mu_anim.h` | Full API |
+| `apps/demo_soft/main.c` | A card that springs to a new corner on click (`MuAnimator`, modal layer); buttons that lift on hover and a scroll view that glides and rubber-bands (widget motion) |
+| `tests/test_anim.c` | The solver's regimes and retargeting; the animator's id-safety; widget motion: a hit area that never moves, partial repaint pixel-identical to full repaint, the no-clock path, an overrun that travels instead of jumping, a glide that never overshoots |
+| `markup/include/markup/mu_spring.h` | `MuSpring` (in `markup_core`) |
+| `markup/include/markup/mu_anim.h` | `MuAnimator` |

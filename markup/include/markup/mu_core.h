@@ -22,6 +22,58 @@ typedef struct MuRect {
     float x, y, w, h;
 } MuRect;
 
+/*
+ * A bounded set of disjoint rectangles.
+ *
+ * Damage used to be one rect, which meant two small changes at opposite corners of the
+ * window unioned into a rect covering the whole thing — and every pixel in it got
+ * cleared, repainted and re-blurred. A region keeps them apart.
+ *
+ * Fixed capacity and no allocation, because this has to work on a target with no
+ * allocator at all. Past the cap the rects are merged rather than dropped, so the region
+ * degrades towards the single-rect behaviour it replaces instead of losing damage.
+ */
+#define MU_DAMAGE_MAX_RECTS 16
+
+typedef struct MuRegion {
+    MuRect rects[MU_DAMAGE_MAX_RECTS];
+    int count;
+} MuRegion;
+
+/** Drop every rect. */
+void mu_region_clear(MuRegion *rg);
+
+/**
+ * Add `r`, keeping the stored rects disjoint.
+ *
+ * Disjointness is an invariant callers depend on, not a tidiness nicety: consumers walk
+ * the rects and treat each as an independent clip, so a pixel in two rects would be
+ * painted twice and anything translucent over it would blend twice.
+ *
+ * So this cannot simply append. `r` is dropped if some rect already contains it;
+ * otherwise it absorbs every rect it overlaps or touches, repeatedly, because each merge
+ * grows it and can bring a further rect into reach. The survivor is appended. At capacity
+ * the pair whose union wastes the least area is merged to make room, and the result is
+ * re-normalised the same way — a merged bounding box can reach a rect that neither of its
+ * halves touched.
+ *
+ * Every step errs towards covering more than was asked for, never less.
+ */
+void mu_region_add(MuRegion *rg, MuRect r);
+
+bool mu_region_empty(const MuRegion *rg);
+
+/** Bounding box of every rect; {0,0,0,0} when empty. */
+MuRect mu_region_bounds(const MuRegion *rg);
+
+/** True if `r` overlaps any rect in the region. */
+bool mu_region_overlaps(const MuRegion *rg, MuRect r);
+
+int mu_region_count(const MuRegion *rg);
+
+/** Rect `i`, or {0,0,0,0} when `i` is out of range. */
+MuRect mu_region_rect(const MuRegion *rg, int i);
+
 typedef enum MuError {
     MU_OK = 0,
     MU_ERR_NOMEM,
@@ -54,6 +106,14 @@ typedef struct MuNodeOps {
     bool (*on_pointer)(MuContext *ctx, MuNode *node, const void *event);
     bool (*on_key)(MuContext *ctx, MuNode *node, const void *event);
     bool (*on_char)(MuContext *ctx, MuNode *node, unsigned int codepoint);
+    /**
+     * Optional per-frame step for a node's own motion, called by mu_damage_collect just
+     * before the node is compared against last frame — so whatever it changes is damaged
+     * the same frame. Usually it advances a MuSpring and writes node->paint_offset.
+     * Return true while still moving; `dt` is the frame clock from mu_frame_set_dt, 0 if
+     * the app gave none, in which case motion should land at once (mu_spring_follow does).
+     */
+    bool (*animate)(MuContext *ctx, MuNode *node, float dt);
 } MuNodeOps;
 
 struct MuNode {
@@ -74,9 +134,19 @@ struct MuNode {
      * appearance depends on pixels it does not own. */
     float backdrop_blur;
 
-    /* Damage tracking: last painted geometry and appearance-affecting flags. Compared
-     * once per frame so moves, resizes and hover/press/focus changes are detected
-     * automatically instead of relying on every mutation site remembering to mark. */
+    /*
+     * Where the node and its subtree are *drawn*, relative to where layout put them.
+     * Visual only: layout, hit testing and input all keep using bounds, so a button that
+     * lifts on hover cannot lift itself out from under the pointer that is hovering it.
+     * Painting shifts by the sum of this and every ancestor's offset; damage tracking
+     * compares the shifted rect. Animate it by writing it from an `animate` op.
+     */
+    MuVec2 paint_offset;
+
+    /* Damage tracking: last *painted* rect (bounds shifted by the accumulated
+     * paint_offset) and appearance-affecting flags. Compared once per frame so moves,
+     * resizes and hover/press/focus changes are detected automatically instead of relying
+     * on every mutation site remembering to mark. */
     MuRect prev_bounds;
     uint32_t prev_flags;
 };
@@ -100,7 +170,7 @@ struct MuNode {
  *
  * Sticky on purpose. Unlike every other damage signal it is not cleared at the end of the
  * frame that raised it, but when the blur is actually recomputed — which may be many
- * frames later if the node is hidden or falls outside the damage rect in between. A
+ * frames later if the node is hidden or falls outside the damage region in between. A
  * per-frame flag would go stale exactly there: a panel hidden while the content behind it
  * moves would come back believing its cached blur still matched.
  */
@@ -153,9 +223,9 @@ struct MuContext {
     MuNode *popup_layer;
     uint32_t active_popup_id;
 
-    /* Union of everything needing repaint this frame. Valid after mu_damage_collect. */
-    MuRect damage;
-    bool damage_any;
+    /* Everything needing repaint this frame, as disjoint rects. Valid after
+     * mu_damage_collect. Empty means nothing to do. */
+    MuRegion damage;
     /* Set to force a full repaint every frame; the A/B reference for checking that no
      * invalidation has been missed. */
     bool damage_force_all;
@@ -168,6 +238,10 @@ struct MuContext {
     bool backdrop_overflow;
 
     uint64_t frame_index;
+    /* Seconds this frame advances widget motion by (mu_frame_set_dt); 0 = no clock. */
+    float frame_dt;
+    /* Nodes whose `animate` op reported motion in the last mu_damage_collect. */
+    int animating;
     MuError last_error;
     char last_message[128];
 
@@ -194,13 +268,28 @@ MuNode *mu_context_find_id(MuContext *ctx, MuNode *subtree, uint32_t id);
 void mu_frame_begin(MuContext *ctx);
 void mu_frame_end(MuContext *ctx);
 
+/**
+ * Real elapsed seconds for this frame, before mu_damage_collect. Built-in widget motion
+ * (hover lift, scroll rubber-banding) advances by it. Never set, or set to 0, and that
+ * motion lands instantly instead — correct, just not animated.
+ */
+void mu_frame_set_dt(MuContext *ctx, float seconds);
+
+/**
+ * How many nodes are still moving after the last mu_damage_collect. Non-zero means the
+ * app should keep producing frames; 0 means it can wait for input.
+ */
+int mu_animating(const MuContext *ctx);
+
 /*
  * Damage tracking.
  *
- * mu_paint_all repaints the whole tree clipped to a single union damage rect, rather
- * than tracking per-node regions. Repainting everything that intersects the rect, in
- * normal order, is what keeps transparency and overlap correct — a node cannot be
- * redrawn without whatever shows through beneath it being redrawn too.
+ * mu_paint_damaged repaints the whole tree once per damage rect, clipped to that rect.
+ * Within a rect everything intersecting it is repainted in normal order, which is what
+ * keeps transparency and overlap correct — a node cannot be redrawn without whatever
+ * shows through beneath it being redrawn too. Across rects it is the disjointness
+ * MuRegion maintains that keeps it correct, since a pixel in two rects would be painted
+ * twice and anything translucent over it would blend twice.
  *
  * Most damage is discovered by mu_damage_collect comparing each node's bounds and
  * style flags against the previous frame, so moves, resizes, visibility changes and
@@ -209,7 +298,7 @@ void mu_frame_end(MuContext *ctx);
  * needs mu_node_mark_paint_dirty.
  */
 
-/** Union `r` into this frame's damage. */
+/** Add `r` to this frame's damage. */
 void mu_damage_add(MuContext *ctx, MuRect r);
 
 /** Force a full repaint this frame (resize, theme change, first frame). */
@@ -226,7 +315,8 @@ void mu_node_mark_paint_dirty(MuNode *node);
  *
  * Damage handling accounts for this: because the result depends on content the node does
  * not own, and because the blur kernel reaches outside the node, mu_damage_collect grows
- * the damage rect to cover the node plus its blur radius whenever it is touched at all.
+ * the damage to put the node plus its blur radius inside a single rect whenever it is
+ * touched at all.
  */
 void mu_node_set_backdrop_blur(MuNode *node, float radius);
 
@@ -252,6 +342,23 @@ bool mu_node_backdrop_unchanged(const MuContext *ctx, const MuNode *node);
 void mu_node_backdrop_mark_clean(MuNode *node);
 
 bool mu_damage_empty(const MuContext *ctx);
+
+/**
+ * This frame's damage, rect by rect. Valid until the next mu_damage_* call.
+ *
+ * What to repaint, and what to clear beforehand: the two must agree exactly. Clearing
+ * the bounding box while painting only the region's rects leaves cleared-but-unpainted
+ * holes showing the clear colour.
+ */
+const MuRegion *mu_damage_region(const MuContext *ctx);
+
+/**
+ * Bounding box of this frame's damage.
+ *
+ * For *presenting* only — uploading or blitting the bounding box is harmless, because
+ * the pixels inside it that the region did not cover still hold last frame's content.
+ * Never use it to clear: see mu_damage_region.
+ */
 MuRect mu_damage_rect(const MuContext *ctx);
 
 /** Drop accumulated damage. Call after presenting the frame. */

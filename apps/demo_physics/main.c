@@ -344,10 +344,12 @@ int main(int argc, char **argv) {
         MuColor clear = ctx.style ? ctx.style->page_bg : (MuColor){12, 14, 18, 255};
         mu_damage_collect(&ctx);
         if (!mu_damage_empty(&ctx)) {
-            MuRect area = mu_damage_rect(&ctx);
-            mu_soft_begin_frame_rect(&rc, clear, area);
+            /* Clear the region, not its bounding box: mu_paint_damaged paints only the
+             * region's rects, so anything else cleared stays flat clear colour. The
+             * upload may be the box, whose other pixels still hold last frame. */
+            mu_soft_begin_frame_region(&rc, clear, mu_damage_region(&ctx));
             mu_paint_damaged(&ctx, &rc);
-            mu_sdl_present_rect(app, &rc, area);
+            mu_sdl_present_rect(app, &rc, mu_damage_rect(&ctx));
         }
         mu_damage_reset(&ctx);
         mu_frame_end(&ctx);

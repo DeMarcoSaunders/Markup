@@ -81,10 +81,23 @@ tracking repaints only what changed. An idle frame does no pixel work at all.
 It is **opt-in**: `mu_paint_all` still repaints everything, and callers that do not want to
 manage the clear/present region should keep using it.
 
+### A region, not a rect
+
+Damage is a `MuRegion`: up to `MU_DAMAGE_MAX_RECTS` (16) disjoint rectangles, fixed
+capacity, no allocation. It used to be a single rect that everything was unioned into,
+which meant two small changes at opposite corners of the window produced a rect covering
+almost the whole thing — every pixel in it cleared, repainted and re-blurred for nothing.
+
+`mu_region_add` keeps the stored rects **disjoint**. It drops a rect already contained in
+another; otherwise the new rect absorbs every rect it overlaps or touches, repeatedly,
+because each merge grows it and can bring a further rect into reach. Past the cap the pair
+whose union wastes the least area is merged to make room, so the region degrades towards
+the single union rect it replaced rather than losing damage. Every step errs towards
+covering more than was asked for, never less.
+
 ### The frame loop
 
-The call order matters. Collect damage, ask for the rect, clear *that rect only*, paint
-clipped to it, present the same rect, then reset.
+The call order matters. Collect damage, clear *the region*, paint, present, then reset.
 
 ```c
 mu_frame_begin(&ctx);
@@ -92,25 +105,39 @@ mu_layout_run(&ctx);
 
 mu_damage_collect(&ctx);
 if (!mu_damage_empty(&ctx)) {
-    MuRect area = mu_damage_rect(&ctx);
-    mu_soft_begin_frame_rect(&rc, clear_color, area);  /* clears only `area` */
-    mu_paint_damaged(&ctx, &rc);                       /* paints clipped to `area` */
-    mu_sdl_present_rect(app, &rc, area);               /* uploads only `area` */
+    mu_soft_begin_frame_region(&rc, clear_color, mu_damage_region(&ctx)); /* clears each rect */
+    mu_paint_damaged(&ctx, &rc);               /* paints once per rect, clipped to it */
+    mu_sdl_present_rect(app, &rc, mu_damage_rect(&ctx)); /* uploads the bounding box */
 }
 mu_damage_reset(&ctx);
 
 mu_frame_end(&ctx);
 ```
 
-Clearing and presenting the *same* rect the paint used is the part that is easy to get
-wrong. Clear more than you paint and you get holes; present less and you get stale pixels.
+Clearing exactly what the paint covers is the part that is easy to get wrong, which is why
+`mu_soft_begin_frame_region` takes the region directly: pass `mu_damage_region(&ctx)`
+straight through and the two cannot drift apart. Clearing `mu_damage_rect` instead — the
+bounding box — would blank the gaps between the rects, which nothing then repaints, leaving
+holes of flat clear colour.
+
+Presenting the bounding box *is* fine, and is why `mu_damage_rect` still exists. The pixels
+inside the box that the region did not cover were never touched, so they still hold last
+frame's content; uploading them again costs a little bandwidth and changes nothing.
+
+`mu_paint_damaged` walks the tree once per rect with the scissor set to that rect. Within a
+rect everything intersecting it is repainted in normal order, which is what keeps overlap
+and transparency correct. Across rects it is the disjointness that keeps it correct: a
+pixel in two rects would be painted twice, and anything translucent over it would blend
+twice.
 
 ### What is automatic
 
 Most damage is **discovered, not declared**. `mu_damage_collect` compares every node's
-bounds and style flags against a snapshot of the previous frame, so moves, resizes,
+painted rect and style flags against a snapshot of the previous frame, so moves, resizes,
 visibility changes and hover/press/focus are all picked up without any call site
-remembering to mark anything.
+remembering to mark anything. "Painted rect" is the bounds shifted by the node's (and its
+ancestors') `paint_offset`, which is how a button lifting on hover damages where it is
+drawn while its layout bounds never move — see [ANIMATION.md](ANIMATION.md#widget-motion).
 
 That matters because the failure mode of a missed invalidation — stale pixels that persist
 until something happens to overlap them — is miserable to debug.
@@ -134,7 +161,9 @@ somewhere. The tree still gets walked with the flag set, so turning it back off 
 report a spurious frame of damage.
 
 `tests/test_damage.c` uses exactly this: it renders the same interaction twice, once
-partial and once forced, and compares the surfaces pixel for pixel.
+partial and once forced, and compares the surfaces pixel for pixel. It also asserts on the
+rect *count* — two opposite-corner changes must stay two rects — because the A/B comparison
+on its own passes just as happily with a single union rect.
 
 ---
 
@@ -225,7 +254,7 @@ the region the blur kernel reads. A node's own children are excluded because the
 
 That verdict is sticky. It is not cleared at the end of the frame that raised it, but when
 the blur is actually recomputed — which may be many frames later if the node was hidden or
-fell outside the damage rect in between. A per-frame flag would go stale exactly there: a
+fell outside the damage region in between. A per-frame flag would go stale exactly there: a
 panel hidden while the content behind it moves would come back believing its cached blur
 still matched.
 
@@ -314,9 +343,12 @@ passes are the majority of it. Tuning against one radius will disappoint at the 
 
 **A blurred node forces its own damage.** Because its appearance depends on pixels it does
 not own, and because the kernel samples beyond its edge, `mu_damage_collect` grows the
-damage rect to cover the node plus its blur radius whenever it is touched at all. A large
-blurred panel therefore makes damage rects large. This is not optional — without it the
-blur re-reads its own previous output near the damage boundary and smears a little more
+damage until a **single** rect covers the node plus its blur radius, whenever it is touched
+at all. A large blurred panel therefore makes damage rects large. One rect and not the
+region as a whole, because each rect is painted under its own scissor: a node straddling
+two of them would blur each half against the other half's stale pixels. This is not
+optional — without it the blur re-reads its own previous output near the damage boundary
+and smears a little more
 every frame.
 
 **`mu_layout_run` only walks `ctx->root`.** The modal and popup layers are not laid out.

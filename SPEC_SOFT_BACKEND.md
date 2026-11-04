@@ -3,6 +3,12 @@
 Plan for a dependency-free rendering backend, enabling Markup to run on bare metal
 and non-Linux targets without OpenGL, Skia, or a windowing system.
 
+**Status.** Phases 0–5 are built and in `markup_soft`; Phase 6 (bare metal) is not.
+A phase marked DONE records what shipped, including where that diverged from the plan
+above it — the plan text is left as written rather than edited to agree with the
+outcome, so the divergences are visible. Day estimates on finished phases are historical.
+For the backend as it exists now, read **RENDERING.md**; this file is how it got there.
+
 ---
 
 ## 1. Goal
@@ -30,14 +36,23 @@ abstraction holds.
 
 | Group | Functions |
 |---|---|
-| Lifecycle | `mu_render_init`, `mu_render_shutdown`, `mu_render_begin`, `mu_render_end`, `mu_render_bind_measure` |
 | Struct | `struct MuRenderContext` (backend-owned definition) |
-| Draw | `mu_draw_rect`, `mu_draw_text`, `mu_draw_image`, `mu_push_scissor`, `mu_pop_scissor` |
-| Text | `mu_text_measure`, `mu_font_load_file` |
+| Draw | `mu_draw_rect`, `mu_draw_text`, `mu_draw_text_wrapped`, `mu_draw_image`, `mu_push_scissor`, `mu_pop_scissor` |
+| Text | `mu_text_measure`, `mu_text_measure_wrapped`, `mu_render_bind_measure` |
 | Image | `mu_image_load_file`, `mu_image_get_size` |
-| Frame | `mu_soft_frame` (pump input into `mu_input_dispatch_*`) |
+| Size | `mu_render_logical_size` |
+| Blur | `mu_draw_backdrop_blur` (+ the `mu_backdrop_cache_*` trio if the backend caches) |
 
 **~15 functions.** That is the whole job.
+
+Shipped shape: this is the shared contract, declared in `mu_render.h`, and it is the whole
+of it. **Lifecycle is not in it.** Each backend names its own — `mu_soft_render_init` /
+`mu_soft_render_shutdown` / `mu_soft_begin_frame`, `mu_skia_render_init` /
+`mu_skia_begin_frame` / `mu_skia_end_frame`, and raylib the odd one out on bare
+`mu_render_init` / `mu_render_shutdown` — because what a backend needs to start differs
+too much to share a signature: soft takes a buffer and nothing else, the GPU backends need
+a live window first. Input pumping is likewise per-harness (`mu_sdl_frame`,
+`mu_raylib_frame`) and not part of the contract.
 
 ### What comes free (already backend-neutral — do not reimplement)
 
@@ -103,7 +118,7 @@ typedef struct MuSoftSurface {
 
 ## 4. Phases
 
-### Phase 0 — Unblock backend selection · ~1 day
+### Phase 0 — Unblock backend selection · DONE (differently)
 
 Three existing issues make a third backend impossible to link cleanly. Fix first.
 
@@ -117,12 +132,24 @@ Three existing issues make a third backend impossible to link cleanly. Fix first
   IDs. Move onto `MuRenderContext` while defining the new one.
 - **CMake.** Add `MARKUP_BACKEND=raylib|skia|soft`, compile exactly one backend TU.
 
-**Exit criteria:** `-DMARKUP_BACKEND=skia` builds and runs; `mu.h` is safe to include
-under any backend.
+**Exit criteria:** met, by three different mechanisms than the ones prescribed above.
+
+- **`mu.h`** includes `mu_backend.h`, which selects exactly one backend header from the
+  `MU_BACKEND_*` compile definition the CMake target carries. Each backend header then
+  asserts `MU_RENDER_BACKEND_SELECTED` and `#error`s if a second one is included in the
+  same TU. That is stronger than gating: the silent wrong-layout case the plan describes
+  is now a compile error naming the problem, not something a careful include order avoids.
+- **No `MARKUP_BACKEND` variable.** Backends are independent `MARKUP_WITH_*` options and
+  independent targets, so a build can contain several (the SDL harness and Skia coexist)
+  and a consumer picks one by which `markup::*` target it links. One backend per
+  *translation unit*, enforced as above — not one per build.
+- **Backend statics stayed.** `g_mu_measure_rc` is still file-scope in `mu_raylib.c`. The
+  soft and Skia backends carry their measurement context on `MuRenderContext` as the plan
+  asked; raylib did not get the same treatment and now will not, since it is deprecated.
 
 ---
 
-### Phase 1 — Rasterizer core · ~2–3 days
+### Phase 1 — Rasterizer core · DONE
 
 Square-cornered rects only. No text, no images.
 
@@ -134,8 +161,14 @@ Square-cornered rects only. No text, no images.
 - `mu_draw_rect` with `radius` ignored.
 - `mu_soft_pixel_data()`; point `mu_sdl.c` at it.
 
-**Exit criteria:** the demo app renders in an SDL window with all panels, buttons,
-and chrome as correctly-positioned flat colored boxes. Layout is visibly correct.
+**Exit criteria:** met.
+
+Shipped shape: there is no `MuSoftSurface` type. Those four fields sit directly on the
+soft `struct MuRenderContext` (plus `owns_pixels`, so
+`mu_soft_render_init_borrowed` can wrap a framebuffer the caller owns — the bare-metal
+case this whole spec exists for). A separate surface struct would have been a second
+thing to pass to every draw call for no gain, since there is exactly one per context.
+The clip stack is `MU_SOFT_CLIP_MAX` deep and saturates rather than overflowing.
 
 ---
 
@@ -187,17 +220,21 @@ confirmed on screen via `demo_soft`.
 `markup_sdl` no longer depends on Skia — it presents through `mu_present_pixel_data()`,
 so `MARKUP_WITH_SDL=ON` builds the harness plus `demo_soft` with no GPU stack at all.
 
-Two build shapes are now verified:
+Two build shapes were verified here:
 
 ```
 cmake -S . -B build          -DMARKUP_WITH_SDL=ON                    # raylib + software
 cmake -S . -B build-nogpu    -DMARKUP_WITH_RAYLIB=OFF -DMARKUP_WITH_SDL=ON   # software only
 ```
 
-The second acquires neither raylib nor Skia and still produces `demo_soft` and both test
-binaries — the standing proof that the software path carries no GPU dependency. Getting
-there needed `markup_raylib`, `markup_demo_font` and the raylib acquisition itself to be
-guarded; they had been unconditional.
+Getting the second to work needed `markup_raylib`, `markup_demo_font` and the raylib
+acquisition itself to be guarded; they had been unconditional. It was the standing proof
+that the software path carries no GPU dependency.
+
+**Since superseded:** `MARKUP_WITH_RAYLIB` now defaults **OFF**, so the two commands
+above produce the same thing and the no-GPU shape is simply the default build. The
+dependency-free path is no longer a second configuration to remember — it is what
+`cmake -S . -B build` gives you, with `-DMARKUP_WITH_SDL=ON` added only to get a window.
 
 `demo_soft --shot <file.bmp>` renders one frame, writes it, and exits. The software
 backend holds no GPU state, so that file is exactly what the window shows, which makes
@@ -313,6 +350,7 @@ far easier now than as a retrofit.**
   state mutation in widgets, layout changes, tree mutation.
 - Accumulate a **single union damage rect** on `MuContext`. Start here — it is trivial
   and already a large win. Tiles or per-node rect lists only if measurement demands it.
+  *(Measurement did demand it — see "A region, not a rect" below.)*
 - `mu_paint_all` clips to the damage rect and skips clean subtrees.
 - Backend presents only the damaged region.
 
@@ -339,18 +377,49 @@ A node whose geometry changed damages **both** its old and new bounds, or a move
 copy behind. Node removal and destruction damage the vacated area, since once out of the
 tree nothing is left to report it.
 
-Painting stayed a single union rect rather than tiles or per-node lists. Repainting
-everything intersecting that rect in normal order is what keeps overlap and transparency
-correct — a node is never redrawn without whatever shows through beneath it. Subtrees that
-cannot touch the rect are pruned, and clipping containers are pruned wholesale.
+Within one damage rect, everything intersecting it is repainted in normal order — that is
+what keeps overlap and transparency correct, since a node is never redrawn without whatever
+shows through beneath it. Subtrees that cannot touch the rect are pruned, and clipping
+containers are pruned wholesale.
 
 Opt-in, to avoid breaking existing callers: `mu_paint_all` still repaints unconditionally,
 and `mu_paint_damaged` is the damage-aware entry point. The Skia and raylib demos are
-untouched. `mu_soft_begin_frame_rect` clears only the damage, and `mu_sdl_present_rect`
-uploads only that sub-rect.
+untouched. `mu_soft_begin_frame_region` clears exactly the damaged rects, and
+`mu_sdl_present_rect` uploads their bounding box.
 
 `ctx->damage_force_all` forces full repaint and is the A/B reference for hunting a
 suspected stale pixel.
+
+#### A region, not a rect
+
+The single union rect above did not survive contact with the blur. Two small changes at
+opposite corners union into a rect covering nearly the whole window, so everything in
+between was cleared, repainted and re-blurred for nothing. The backdrop cache's ~13×
+win (RENDERING.md, "Performance") is a win on the *damaged area*, so a union rect that
+grew to the window gave it back the moment a second thing moved.
+
+`MuContext.damage` is now a `MuRegion`: up to `MU_DAMAGE_MAX_RECTS` (16) **disjoint**
+rects, fixed capacity, no allocation, so it still works on a target with no heap. Past the
+cap the pair whose union wastes the least area is merged, which degrades towards the
+single union rect it replaced rather than losing damage. `damage_any` is gone — an empty
+region means nothing to do.
+
+Two invariants carry it, and both fail silently if broken, which is why each has a test:
+
+- **The rects stay disjoint.** `mu_paint_damaged` walks the tree once per rect with the
+  scissor set to it, so a pixel in two rects is painted twice and anything translucent
+  over it blends twice.
+- **Clear covers exactly what paint covers.** Clearing the bounding box instead blanks the
+  gaps between rects, which nothing then repaints, leaving holes of flat clear colour.
+  `mu_soft_begin_frame_region` takes the region itself so the two cannot drift apart.
+
+`mu_damage_rect` still returns the bounds, for *presenting* only: the pixels inside the box
+that no rect covered were never touched, so uploading them again costs bandwidth and
+changes nothing. Backdrop blur is the one consumer that needs more than overlap — its
+kernel samples past the damage edge into last frame's output, so a blurred node and its
+reach must land inside a **single** rect or the blur feeds back on itself.
+
+RENDERING.md documents the region as a user of it would see it.
 
 ---
 
@@ -360,7 +429,9 @@ By this point the rasterizer is proven; only the two OS-facing edges are new.
 
 - **`mu_fb.c`** — acquire a target surface as `(pointer, width, height, stride, format)`.
   Concrete options: DRM dumb buffer, VESA/GOP linear framebuffer, or a custom OS
-  syscall. Present = `memcpy` of the damage rect. Double-buffer if the target tears.
+  syscall. Present = `memcpy` of `mu_damage_rect` (the region's bounding box), or per-rect
+  copies over `mu_damage_region` if the bus makes that worth it. Double-buffer if the
+  target tears.
 - **`mu_evdev.c`** — translate the OS input source into `MuPointerEvent` / `MuKeyEvent`.
   Key IDs in `mu_input.h:25` are already backend-neutral, so this is a lookup table.
   Mirror the dispatch order in `raylib_dispatch_input` (`mu_raylib.c:277`): hover →

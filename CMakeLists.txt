@@ -11,7 +11,13 @@ endif()
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-option(MARKUP_WITH_RAYLIB "Build the raylib backend and its demos" ON)
+# DEPRECATED. The raylib backend is no longer the default and is not maintained: it has
+# no backdrop blur (mu_draw_backdrop_blur degrades to a flat tint and the backdrop cache
+# is a no-op), no test coverage, and it drifted far enough behind the backend interface
+# to stop compiling at one point. markup_soft is the supported backend. Opt back in with
+# -DMARKUP_WITH_RAYLIB=ON; it still builds, and markup::raylib is still exported, so
+# nothing downstream breaks today.
+option(MARKUP_WITH_RAYLIB "DEPRECATED: build the raylib backend and its demos" OFF)
 option(MARKUP_FETCH_RAYLIB "Fetch raylib via FetchContent instead of find_package" ON)
 option(MARKUP_WITH_SKIA "Build the Skia backend and demo_skia (implies MARKUP_WITH_SDL)" OFF)
 option(MARKUP_WITH_SDL "Build the SDL3 window harness and demo_soft (software backend, no GPU)" OFF)
@@ -19,9 +25,13 @@ option(MARKUP_FETCH_SDL3 "Fetch SDL3 via FetchContent when SDL is enabled" ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/markup/cmake")
 
-# raylib is only acquired when its backend is wanted. A software-only build (-DMARKUP_WITH_RAYLIB=OFF)
-# must not need a GPU windowing library, which is the whole premise of markup_soft.
+# raylib is only acquired when its backend is wanted. The default build (raylib OFF) must
+# not need a GPU windowing library, which is the whole premise of markup_soft.
 if(MARKUP_WITH_RAYLIB)
+    message(DEPRECATION
+        "MARKUP_WITH_RAYLIB is deprecated and will be removed. The raylib backend has no "
+        "backdrop blur and no test coverage; markup_soft (-DMARKUP_WITH_SDL=ON for a "
+        "window) is the supported path. See README.md.")
     if(MARKUP_FETCH_RAYLIB)
         include(FetchContent)
         FetchContent_Declare(
@@ -41,11 +51,18 @@ endif()
 add_library(markup_core STATIC
     markup/src/mu_core.c
     markup/src/mu_arena.c
+    markup/src/mu_spring.c
 )
 target_include_directories(markup_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/markup/include>
     $<INSTALL_INTERFACE:include>
 )
+# The spring solver needs expf/cosf/sinf. MSVC has no separate libm; elsewhere it is
+# usually -lm, and a bare-metal libc may fold it in, so link it only where it exists.
+find_library(MARKUP_LIBM m)
+if(MARKUP_LIBM)
+    target_link_libraries(markup_core PUBLIC ${MARKUP_LIBM})
+endif()
 
 add_library(markup_layout_flex STATIC markup/src/mu_layout_flex.c)
 target_link_libraries(markup_layout_flex PUBLIC markup_core)
@@ -347,28 +364,103 @@ if(MARKUP_BUILD_TESTS)
     add_executable(test_blur tests/test_blur.c)
     target_link_libraries(test_blur PRIVATE markup_soft)
     add_test(NAME blur COMMAND test_blur)
+
+    # Installed-package tests. Every test above links the in-build targets, where the
+    # install story is invisible: a wrong EXPORT_NAME, a library left out of install(),
+    # or a backend define that never reached the export all pass. These install to a
+    # throwaway prefix under the build tree and build a standalone consumer against it,
+    # which is what find_package(Markup) consumers actually get. Slower than the rest
+    # (a nested configure and build), and the only tests here that are.
+    # "ipkg/<tag>-p" and "ipkg/<tag>-b" rather than anything descriptive, because the
+    # nested build appends CMakeFiles/CMakeScratch/TryCompile-xxxxxx/cmTC_xxxxx.dir/...
+    # under this path, and on Windows the total has to stay under MAX_PATH (260). Verbose
+    # names here cost about 25 characters and made the test fail from a deep build
+    # directory while passing from a short one.
+    set(MARKUP_INSTALL_TEST_DIR "${CMAKE_CURRENT_BINARY_DIR}/ipkg")
+    function(markup_add_install_test name tag consumer_dir exe)
+        add_test(NAME ${name} COMMAND "${CMAKE_COMMAND}"
+            "-DMARKUP_BUILD_DIR=${CMAKE_BINARY_DIR}"
+            "-DMARKUP_CONFIG=$<CONFIG>"
+            "-DMARKUP_PREFIX=${MARKUP_INSTALL_TEST_DIR}/${tag}-p"
+            "-DMARKUP_CONSUMER_SRC=${CMAKE_CURRENT_SOURCE_DIR}/tests/install_package/${consumer_dir}"
+            "-DMARKUP_CONSUMER_BIN=${MARKUP_INSTALL_TEST_DIR}/${tag}-b"
+            "-DMARKUP_EXE_NAME=${exe}"
+            "-DMARKUP_EXE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+            "-DMARKUP_GENERATOR=${CMAKE_GENERATOR}"
+            "-DMARKUP_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+            "-DMARKUP_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+            "-DMARKUP_C_COMPILER=${CMAKE_C_COMPILER}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_package/run.cmake")
+        # A nested configure fetches nothing but does run compiler detection.
+        set_tests_properties(${name} PROPERTIES TIMEOUT 600)
+    endfunction()
+
+    markup_add_install_test(install_consumer soft consumer_soft consumer_soft)
+
+    # Windows only, and not because the test is Windows-specific. raylib's installed
+    # raylib-config.cmake builds its link interface from pkg-config's LDFLAGS, which comes
+    # back empty under MSVC, so the platform libraries it needs are missing;
+    # MarkupImportedRaylib.cmake patches winmm back in. Whether the same gap exists on
+    # Linux or macOS -- where raylib may want X11, GL, pthread, dl -- has never been
+    # exercised, so enabling it there would be asserting something nobody has checked.
+    #
+    # Lift the WIN32 guard once an installed raylib consumer has actually been linked on
+    # another platform, and add whatever it turns out to need alongside winmm. CI runs
+    # ctest over this build tree unconditionally, so it will pick the test up with no
+    # workflow change. Everything else about the deprecated backend is still covered
+    # everywhere: it is compiled, and install_consumer proves the guard around
+    # MarkupImportedRaylib.cmake keeps it out of a software-only consumer's way.
+    if(TARGET markup_raylib AND WIN32)
+        markup_add_install_test(install_consumer_raylib rl consumer_raylib consumer_raylib)
+    endif()
 endif()
 
 include(GNUInstallDirs)
-# install(EXPORT) on STATIC libs folds private deps (raylib) into the exported interface.
-# CMake then requires raylib (and GLFW) in the same export — not viable. Export only raylib-free
-# targets via MarkupTargets.cmake; markup::raylib / markup::widgets_basic are STATIC IMPORTED in
-# MarkupImportedRaylib.cmake after find_dependency(raylib).
-install(TARGETS markup_core markup_layout_flex markup_style markup_input
+# Everything whose link interface is Markup-internal goes through install(EXPORT). That is
+# what carries transitive linkage, include directories and the PUBLIC MU_BACKEND_* define
+# that mu_backend.h selects on — none of which a hand-written IMPORTED target gets right
+# by accident, and all of which an installed consumer needs.
+#
+# markup_raylib cannot go in. It links raylib PRIVATE, and a STATIC library records that
+# in INTERFACE_LINK_LIBRARIES as $<LINK_ONLY:raylib>, so install(EXPORT) refuses the whole
+# set unless raylib is exported alongside it — which would mean exporting GLFW and its
+# linkage graph too. It is declared STATIC IMPORTED by MarkupImportedRaylib.cmake instead,
+# which is installed and included only when the backend was actually built.
+#
+# markup_skia and markup_sdl are out for the same reason and have no shim: those builds
+# are opt-in, and add_subdirectory / FetchContent wire them correctly already.
+set(MARKUP_EXPORTED_TARGETS
+    markup_core markup_layout_flex markup_style markup_input markup_paint
+    markup_soft markup_widgets_basic markup_compose markup_anim
+    markup_physics markup_physics_node
+)
+# NAMESPACE markup:: below prepends to each target's EXPORT_NAME, which defaults to the
+# target name -- so without this the installed package defined markup::markup_core rather
+# than markup::core, and every consumer snippet in the README failed to configure against
+# an install. (That is why MarkupImportedRaylib.cmake hand-declared markup::raylib and
+# markup::widgets_basic under the right names: it was working around this.) Setting
+# EXPORT_NAME to match the in-build ALIAS targets means add_subdirectory, FetchContent and
+# find_package consumers all write exactly the same target names.
+foreach(_markup_target IN LISTS MARKUP_EXPORTED_TARGETS)
+    string(REGEX REPLACE "^markup_" "" _markup_export_name "${_markup_target}")
+    set_target_properties(${_markup_target} PROPERTIES EXPORT_NAME "${_markup_export_name}")
+endforeach()
+unset(_markup_target)
+unset(_markup_export_name)
+
+install(TARGETS ${MARKUP_EXPORTED_TARGETS}
     EXPORT MarkupTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-set(MARKUP_INSTALL_EXTRA markup_widgets_basic markup_soft)
 if(TARGET markup_raylib)
-    list(APPEND MARKUP_INSTALL_EXTRA markup_raylib)
+    install(TARGETS markup_raylib
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
 endif()
-install(TARGETS ${MARKUP_INSTALL_EXTRA}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
 install(DIRECTORY markup/include/markup DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(EXPORT MarkupTargets
     FILE MarkupTargets.cmake
@@ -390,6 +482,12 @@ configure_package_config_file(
 install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/MarkupConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/MarkupConfigVersion.cmake"
-    "${CMAKE_CURRENT_SOURCE_DIR}/markup/cmake/MarkupImportedRaylib.cmake"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Markup
 )
+# Only shipped when the deprecated backend was built. MarkupConfig.cmake includes it if
+# it is there, so a software-only install never pays find_dependency(raylib REQUIRED).
+if(TARGET markup_raylib)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/markup/cmake/MarkupImportedRaylib.cmake"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Markup
+    )
+endif()

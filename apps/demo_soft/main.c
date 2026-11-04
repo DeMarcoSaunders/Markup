@@ -60,10 +60,7 @@ typedef struct DemoState {
     int card_target;
     MuNode *btn_primary;
     MuNode *btn_secondary;
-    MuRect btn_primary_rest;
-    MuRect btn_secondary_rest;
     MuNode *scroll;
-    MuSpring scroll_bounce;
 } DemoState;
 
 static void on_click(void *user) {
@@ -97,84 +94,6 @@ static void on_card_click(void *user) {
     d->card_target = (d->card_target + 1) % CARD_TARGET_COUNT;
     mu_anim_to(d->animator, d->card, CARD_TARGETS[d->card_target], MU_SPRING_RESPONSE,
                MU_SPRING_BOUNCY);
-}
-
-/*
- * Hover lift — an ordinary flex-managed button springs a few pixels up while hovered.
- *
- * Unlike the card, this node's resting position genuinely belongs to layout — but layout
- * in this codebase is dirty-flag-gated (mu_layout_node bails out unless
- * MU_NODE_LAYOUT_DIRTY is set), not recomputed unconditionally every frame. Once the
- * button is first laid out, mu_layout_run never touches it again on its own, and
- * mu_anim_advance writes node->bounds directly rather than through mu_node_set_bounds, so
- * nothing ever re-dirties it either. That means node->bounds stops being a trustworthy
- * "resting position" the moment this node has animated even once: reading it back as the
- * base for the next target would read the *previous frame's already-lifted* value, lift it
- * again, and again every frame after — a runaway that never settles rather than a hover
- * effect. (Caught exactly that way: the shot capture never reached rest.)
- *
- * The fix is to capture the true resting rect once — before this node has ever animated —
- * and always compute the target from that stable copy, never from live node->bounds.
- *
- * Call once per liftable node per frame, after mu_sdl_frame (so the hover flag is current)
- * and before mu_anim_advance.
- */
-#define HOVER_LIFT_PX 4.f
-#define HOVER_LIFT_RESPONSE 0.15f
-
-static void hover_lift(MuAnimator *anim, MuNode *node, MuRect rest) {
-    if (!node) return;
-    MuRect target = rest;
-    if (node->flags & MU_NODE_HOVERED) target.y -= HOVER_LIFT_PX;
-    mu_anim_to(anim, node, target, HOVER_LIFT_RESPONSE, MU_SPRING_SNAPPY);
-}
-
-/*
- * Scroll rubber-banding — wheel or thumb-drag input that overruns the content springs
- * back instead of clamping dead.
- *
- * This is a plain MuSpring, not MuAnimator: the thing being animated is one scalar (a
- * visual y-offset layered on top of the clamped scroll position), not a node's bounds.
- * mu_scroll.c has no idea any of this is happening — mu_scroll_get_excess only reports how
- * much of the last offset change its own clamp absorbed, which is ordinary bookkeeping the
- * clamp already had to do, not an animation hook. Everything about the spring — the
- * resistance curve, the cap, the bounce back to rest — lives here.
- *
- * Content's bounds are only trustworthy as "the clamped resting position" for one instant:
- * right after mu_scroll_set_offset runs, since nothing re-derives them afterward (the same
- * dirty-gating lesson hover_lift hit). Calling mu_scroll_set_offset with the scroll's own
- * unchanged offset re-triggers that positioning on demand, which is what makes it safe to
- * lay the bounce on top every single frame rather than only on frames something moved. The
- * nudge has to be followed by a real re-layout of the content's children, not just a write
- * to content->bounds — bounds in this codebase are absolute, not parent-relative, so a
- * child positioned before the nudge stays exactly where it was unless flex runs again.
- */
-#define SCROLL_BOUNCE_RESISTANCE 0.5f
-#define SCROLL_BOUNCE_MAX 40.f
-#define SCROLL_BOUNCE_RESPONSE 0.3f
-
-static void scroll_bounce_advance(MuContext *ctx, MuNode *scroll, MuSpring *bounce, float dt) {
-    if (!scroll) return;
-
-    float excess_x = 0.f, excess_y = 0.f;
-    mu_scroll_get_excess(scroll, &excess_x, &excess_y);
-    if (excess_y != 0.f) {
-        float v = bounce->value + excess_y * SCROLL_BOUNCE_RESISTANCE;
-        if (v > SCROLL_BOUNCE_MAX) v = SCROLL_BOUNCE_MAX;
-        if (v < -SCROLL_BOUNCE_MAX) v = -SCROLL_BOUNCE_MAX;
-        bounce->value = v;
-    }
-    mu_spring_step(bounce, dt);
-
-    float sx, sy;
-    mu_scroll_get_offset(scroll, &sx, &sy);
-    mu_scroll_set_offset(ctx, scroll, sx, sy);
-
-    MuNode *content = mu_scroll_content(scroll);
-    if (content && bounce->value != 0.f) {
-        content->bounds.y -= bounce->value;
-        mu_layout_flex_run(ctx, content);
-    }
 }
 
 /*
@@ -332,6 +251,10 @@ static MuNode *controls_column(MuContext *ctx, DemoState *d) {
     mu_node_add_child(ctx, col, mu_make_label(ctx, "Controls"));
     d->btn_primary = mu_make_button(ctx, "Primary", on_click, d);
     d->btn_secondary = mu_make_button(ctx, "Secondary", on_click, d);
+    /* Lift is the button's own behaviour now: a paint offset driven from inside the
+     * widget, so the hit area stays put and nothing here has to step it. */
+    mu_button_set_hover_lift(ctx, d->btn_primary, 4.f);
+    mu_button_set_hover_lift(ctx, d->btn_secondary, 4.f);
     mu_node_add_child(ctx, col, d->btn_primary);
     mu_node_add_child(ctx, col, d->btn_secondary);
     /* Checkboxes are square: without this the column's ALIGN_STRETCH would smear them
@@ -359,6 +282,7 @@ static MuNode *scroll_column(MuContext *ctx, DemoState *d) {
 
     MuNode *scroll = mu_make_scroll(ctx, MU_SCROLL_VERTICAL);
     d->scroll = scroll;
+    mu_scroll_set_spring(scroll, true);
     mu_layout_set_flex(scroll, 1.f, 1.f, 0.f);
     MuNode *content = mu_scroll_content(scroll);
     if (content) {
@@ -412,7 +336,6 @@ int main(int argc, char **argv) {
     DemoState demo = {0};
     demo.ctx = &ctx;
     demo.animator = mu_anim_create();
-    mu_spring_init(&demo.scroll_bounce, 0.f, SCROLL_BOUNCE_RESPONSE, MU_SPRING_SNAPPY);
 
     MuNode *root = mu_make_panel(&ctx, true);
     root->role = "page";
@@ -485,10 +408,6 @@ int main(int argc, char **argv) {
 
     int last_w = 0, last_h = 0;
     uint64_t prev_ticks = SDL_GetTicksNS();
-    /* True whenever the buttons' flex-resting bounds need (re)capturing: initially, and
-     * after any resize reflows the column. See hover_lift's comment for why this cannot
-     * just be read from node->bounds on demand instead. */
-    bool capture_rest = true;
     while (mu_sdl_poll(app, &ctx)) {
         mu_frame_begin(&ctx);
 
@@ -501,16 +420,9 @@ int main(int argc, char **argv) {
             mu_damage_all(&ctx);
             last_w = sw;
             last_h = sh;
-            capture_rest = true;
         }
 
         mu_layout_run(&ctx);
-
-        if (capture_rest) {
-            demo.btn_primary_rest = demo.btn_primary->bounds;
-            demo.btn_secondary_rest = demo.btn_secondary->bounds;
-            capture_rest = false;
-        }
 
         /* The overlay layer is outside the flex tree, so position it by hand and lay out
          * its contents. Straddling the swatch and image rows makes the blur obvious. */
@@ -522,6 +434,9 @@ int main(int argc, char **argv) {
         float dt = (float)((double)(now - prev_ticks) / 1e9);
         prev_ticks = now;
         if (shot_path) dt = 1.f / 60.f; /* deterministic when capturing */
+        /* The clock the widgets' own motion (hover lift, rubber-banding) steps by, inside
+         * mu_damage_collect below. */
+        mu_frame_set_dt(&ctx, dt);
 
         mu_popups_sync(&ctx);
         mu_sdl_frame(&ctx, app);
@@ -540,21 +455,20 @@ int main(int argc, char **argv) {
                 scroll_kicked = true;
             }
         }
-        hover_lift(demo.animator, demo.btn_primary, demo.btn_primary_rest);
-        hover_lift(demo.animator, demo.btn_secondary, demo.btn_secondary_rest);
 
         mu_anim_advance(&ctx, demo.animator, dt);
-        scroll_bounce_advance(&ctx, demo.scroll, &demo.scroll_bounce, dt);
 
-        /* mu_paint_all collects damage; ask for it afterwards, then clear and upload
-         * only that region. An idle frame damages nothing and does no pixel work. */
+        /* Clear and paint the damage region, then upload its bounding box. The clear
+         * must be the region and not the box: mu_paint_damaged paints only the region's
+         * rects, so anything else cleared would stay flat clear colour. The upload may
+         * be the box, because those same pixels still hold last frame's content. An idle
+         * frame damages nothing and does no pixel work at all. */
         MuColor clear = ctx.style ? ctx.style->page_bg : (MuColor){12, 14, 18, 255};
         mu_damage_collect(&ctx);
         if (!mu_damage_empty(&ctx)) {
-            MuRect area = mu_damage_rect(&ctx);
-            mu_soft_begin_frame_rect(&rc, clear, area);
+            mu_soft_begin_frame_region(&rc, clear, mu_damage_region(&ctx));
             mu_paint_damaged(&ctx, &rc);
-            mu_sdl_present_rect(app, &rc, area);
+            mu_sdl_present_rect(app, &rc, mu_damage_rect(&ctx));
         }
         mu_damage_reset(&ctx);
 
@@ -566,7 +480,7 @@ int main(int argc, char **argv) {
             static int shot_frame = 0;
             if (shot_frame == 0) on_card_click(&demo);
             shot_frame++;
-            bool settled = mu_anim_count(demo.animator) == 0 && mu_spring_at_rest(&demo.scroll_bounce);
+            bool settled = mu_anim_count(demo.animator) == 0 && mu_animating(&ctx) == 0;
             if (settled || shot_frame > 300) {
                 bool ok = save_shot(&rc, shot_path);
                 printf("demo_soft: %s %s (%dx%d, everything %s after %d frame%s)\n",

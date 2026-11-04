@@ -3,6 +3,7 @@
 #include "../include/markup/mu_style.h"
 #include "../include/markup/mu_render.h"
 #include "../include/markup/mu_input.h"
+#include "../include/markup/mu_spring.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,7 +51,24 @@ typedef struct MuScrollState {
      * Positive means an offset change asked to go past the max end, negative past zero. */
     float excess_x;
     float excess_y;
+    /*
+     * Spring motion. shown_x/y are where the content is *drawn*; they chase scroll_x/y,
+     * which stay the clamped truth that layout and hit testing use. A wheel step glides
+     * there instead of jumping, and a push past an end the clamp refused becomes speed,
+     * so the drawn position runs past the end and comes back. The difference reaches the
+     * screen as content->paint_offset.
+     */
+    bool spring;
+    MuSpring shown_x;
+    MuSpring shown_y;
 } MuScrollState;
+
+#define MU_SCROLL_SPRING_RESPONSE 0.3f
+/* Refused pixels -> pixels/second of overrun. */
+#define MU_SCROLL_KICK 9.f
+#define MU_SCROLL_KICK_MAX_SPEED 1800.f
+/* Stretch at which a further push stops adding anything: resistance grows as it pulls. */
+#define MU_SCROLL_STRETCH_MAX 60.f
 
 typedef struct MuScrollBarGeom {
     bool show_v;
@@ -260,6 +278,63 @@ static bool scroll_on_pointer(MuContext *ctx, MuNode *node, const void *evp) {
     return false;
 }
 
+/*
+ * A push the clamp refused becomes velocity on the drawn position, not a displacement of
+ * it. Displacing teleports the content the full stretch in one frame; adding speed makes
+ * it travel out over a few frames and back, with nothing discontinuous at either end. The
+ * further it is already stretched, the less a new push adds, so repeated pushes at an end
+ * cannot pull it out without bound.
+ */
+static void overrun_kick(MuSpring *shown, float settled, float excess) {
+    if (excess == 0.f) return;
+    float stretch = fabsf(shown->value - settled);
+    float give = 1.f - stretch / MU_SCROLL_STRETCH_MAX;
+    if (give <= 0.f) return;
+    float v = shown->velocity + excess * MU_SCROLL_KICK * give;
+    if (v > MU_SCROLL_KICK_MAX_SPEED) v = MU_SCROLL_KICK_MAX_SPEED;
+    if (v < -MU_SCROLL_KICK_MAX_SPEED) v = -MU_SCROLL_KICK_MAX_SPEED;
+    shown->velocity = v;
+}
+
+static bool scroll_animate(MuContext *ctx, MuNode *node, float dt) {
+    (void)ctx;
+    MuScrollState *s = scroll_state(node);
+    if (!s || !s->content) return false;
+
+    if (!s->spring) {
+        /* Switched off mid-motion: land rather than freeze where it was. */
+        if (s->content->paint_offset.x != 0.f || s->content->paint_offset.y != 0.f) {
+            mu_spring_snap(&s->shown_x, s->scroll_x);
+            mu_spring_snap(&s->shown_y, s->scroll_y);
+            s->content->paint_offset = (MuVec2){0.f, 0.f};
+            mu_node_mark_paint_dirty(node);
+        }
+        return false;
+    }
+
+    float was_x = s->shown_x.value, was_y = s->shown_y.value;
+    if (s->drag != MU_SCROLL_DRAG_NONE) {
+        /* A dragged thumb is held by the hand: the content follows it exactly, and a drag
+         * past the end just stops there rather than bouncing against the pointer. */
+        mu_spring_snap(&s->shown_x, s->scroll_x);
+        mu_spring_snap(&s->shown_y, s->scroll_y);
+    } else {
+        overrun_kick(&s->shown_x, s->scroll_x, s->excess_x);
+        overrun_kick(&s->shown_y, s->scroll_y, s->excess_y);
+    }
+    s->excess_x = 0.f;
+    s->excess_y = 0.f;
+
+    bool mx = mu_spring_follow(&s->shown_x, s->scroll_x, dt);
+    bool my = mu_spring_follow(&s->shown_y, s->scroll_y, dt);
+    /* Layout placed the content for scroll_x/y; draw it where shown_x/y say instead. */
+    s->content->paint_offset = (MuVec2){s->scroll_x - s->shown_x.value, s->scroll_y - s->shown_y.value};
+    /* The thumb follows the drawn position too, but it is painted by this node at bounds
+     * that never move, so nothing would notice it changing without this. */
+    if (s->shown_x.value != was_x || s->shown_y.value != was_y) mu_node_mark_paint_dirty(node);
+    return mx || my;
+}
+
 static void scroll_destroy(MuContext *ctx, MuNode *node) {
     (void)ctx;
     free(node->state);
@@ -341,6 +416,33 @@ static void scroll_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     if (g.view.w > 0.f && g.view.h > 0.f) mu_push_scissor(rc, g.view);
 }
 
+/*
+ * Place one thumb from the drawn position rather than the clamped one, so it glides with
+ * the content; past an end it is pinned to that end and squeezed by the overrun, which is
+ * the scrollbar's half of the stretch. Hit testing keeps using scroll_bar_geom as is.
+ */
+static void thumb_follow(float shown, float max_scroll, float track_pos, float track_len, float *pos, float *len) {
+    if (max_scroll <= 0.f) return;
+    float t = shown / max_scroll;
+    if (t < 0.f) t = 0.f;
+    if (t > 1.f) t = 1.f;
+    float l = *len;
+    if (shown < 0.f) l += shown;
+    else if (shown > max_scroll) l -= shown - max_scroll;
+    if (l < 12.f) l = 12.f;
+    *len = l;
+    *pos = shown > max_scroll ? track_pos + track_len - l : track_pos + t * (track_len - l);
+}
+
+static void scroll_thumbs_follow_shown(const MuScrollState *s, MuScrollBarGeom *g) {
+    if (g->show_v)
+        thumb_follow(s->shown_y.value, s->content_h - g->view.h, g->track_v.y, g->track_v.h, &g->thumb_v.y,
+                     &g->thumb_v.h);
+    if (g->show_h)
+        thumb_follow(s->shown_x.value, s->content_w - g->view.w, g->track_h.x, g->track_h.w, &g->thumb_h.x,
+                     &g->thumb_h.w);
+}
+
 static void scroll_paint_overlay(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuScrollState *s = scroll_state(node);
     MuScrollBarGeom g = scroll_bar_geom(node, s);
@@ -354,6 +456,8 @@ static void scroll_paint_overlay(MuContext *ctx, MuNode *node, MuRenderContext *
     MuColor track = theme ? theme->slider_track : (MuColor){80, 88, 104, 200};
     MuColor thumb = theme ? theme->slider_thumb : (MuColor){120, 140, 180, 255};
     if (s && s->drag != MU_SCROLL_DRAG_NONE && theme) thumb = theme->button_bg_hover;
+
+    if (s && s->spring) scroll_thumbs_follow_shown(s, &g);
 
     if (g.show_v) {
         mu_draw_rect(rc, g.track_v, track, (MuColor){0, 0, 0, 0}, 0.f, 2.f);
@@ -385,6 +489,7 @@ const MuNodeOps mu_scroll_node_ops = {
     .on_pointer = scroll_on_pointer,
     .on_key = NULL,
     .on_char = NULL,
+    .animate = scroll_animate,
 };
 
 static MuNode *scroll_create_content(MuContext *ctx) {
@@ -405,6 +510,10 @@ MuNode *mu_make_scroll(MuContext *ctx, MuScrollAxis axis) {
     MuScrollState *s = (MuScrollState *)calloc(1, sizeof(MuScrollState));
     if (!s) return NULL;
     s->axis = axis == 0 ? MU_SCROLL_VERTICAL : axis;
+    /* Critically damped: a glide lands without wobbling past its line, and an overrun
+     * goes out and comes back once rather than ringing. */
+    mu_spring_init(&s->shown_x, 0.f, MU_SCROLL_SPRING_RESPONSE, MU_SPRING_STIFF);
+    mu_spring_init(&s->shown_y, 0.f, MU_SCROLL_SPRING_RESPONSE, MU_SPRING_STIFF);
 
     MuNode *scroll = mu_node_create(ctx, scroll_kind, s);
     if (!scroll) {
@@ -458,6 +567,18 @@ void mu_scroll_get_offset(const MuNode *scroll, float *out_x, float *out_y) {
     const MuScrollState *s = scroll ? (const MuScrollState *)scroll->state : NULL;
     if (out_x) *out_x = s ? s->scroll_x : 0.f;
     if (out_y) *out_y = s ? s->scroll_y : 0.f;
+}
+
+void mu_scroll_set_spring(MuNode *scroll, bool on) {
+    MuScrollState *s = scroll_state(scroll);
+    if (!s) return;
+    s->spring = on;
+    /* Start from where it is, so switching on does not glide in from zero, and overflow
+     * from before it was switched on is not this gesture's to bounce. */
+    mu_spring_snap(&s->shown_x, s->scroll_x);
+    mu_spring_snap(&s->shown_y, s->scroll_y);
+    s->excess_x = 0.f;
+    s->excess_y = 0.f;
 }
 
 void mu_scroll_get_excess(MuNode *scroll, float *out_x, float *out_y) {

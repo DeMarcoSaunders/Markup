@@ -33,6 +33,13 @@ MuNode *mu_make_panel(MuContext *ctx, bool column);
 void mu_panel_set_on_click(MuNode *panel, void (*on_click)(void *), void *user);
 MuNode *mu_make_label(MuContext *ctx, const char *text);
 MuNode *mu_make_button(MuContext *ctx, const char *text, void (*cb)(void *), void *user);
+/**
+ * Spring the button up by `pixels` while hovered (0, the default, turns it off). Purely
+ * visual — it moves where the button is drawn, never its bounds — so hit testing stays
+ * put. Animates when the app supplies a frame clock with mu_frame_set_dt; without one the
+ * button just jumps to the lifted position.
+ */
+void mu_button_set_hover_lift(MuContext *ctx, MuNode *button, float pixels);
 MuNode *mu_make_slider(MuContext *ctx, float mn, float mx, float val);
 MuNode *mu_make_checkbox(MuContext *ctx, bool on, void (*on_toggle)(void *, bool), void *user);
 MuNode *mu_make_dropdown(MuContext *ctx);
@@ -71,11 +78,21 @@ void mu_scroll_by(MuContext *ctx, MuNode *scroll, float dx, float dy);
 void mu_widgets_dispatch_wheel(MuContext *ctx, MuVec2 position, float delta_x, float delta_y);
 
 /**
+ * Spring motion for a scroll view, off by default. The content is drawn by a spring that
+ * chases the real offset: a wheel step glides instead of jumping, and a push past either
+ * end carries the content out beyond it and back (rubber-banding). The scrollbar thumb
+ * follows the drawn position and squeezes against an end it is pulled past. Visual only:
+ * the offset never leaves its range, and hit testing uses it, so a row clicked mid-glide
+ * is the row at the real offset. A dragged thumb is followed exactly, with no bounce.
+ * Animates when the app supplies mu_frame_set_dt; with no clock it behaves as if off.
+ */
+void mu_scroll_set_spring(MuNode *scroll, bool on);
+
+/**
  * How much of the most recent offset change(s) the clamp absorbed — positive past the
  * max end, negative past zero — accumulated since the last call and reset by reading it.
- * mu_scroll.c has no notion of animation; this just surfaces information the clamp already
- * computes, so a caller can drive its own spring for rubber-banding without this widget
- * depending on markup_anim.
+ * For callers building their own overscroll effect. With spring motion on, the scroll
+ * view consumes this itself every frame, so it reads 0 here.
  */
 void mu_scroll_get_excess(MuNode *scroll, float *out_x, float *out_y);
 

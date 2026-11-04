@@ -122,8 +122,13 @@ MuNode *mu_node_create(MuContext *ctx, uint32_t kind, void *state) {
 
 void mu_node_destroy_recursive(MuContext *ctx, MuNode *node) {
     if (!node) return;
-    /* Repaint what it covered — once freed, nothing is left to report the damage. */
-    if (ctx && (node->flags & MU_NODE_VISIBLE)) mu_damage_add(ctx, node->bounds);
+    /* Repaint what it covered — once freed, nothing is left to report the damage. Both
+     * rects: prev_bounds is where it was last drawn, which differs while paint_offset is
+     * moving it (zero-sized, so ignored, if it never painted). */
+    if (ctx && (node->flags & MU_NODE_VISIBLE)) {
+        mu_damage_add(ctx, node->bounds);
+        mu_damage_add(ctx, node->prev_bounds);
+    }
     destroy_subtree_states(ctx, node);
     free_subtree(ctx, node);
 }
@@ -146,7 +151,10 @@ bool mu_node_add_child(MuContext *ctx, MuNode *parent, MuNode *child) {
 
 void mu_node_remove_child(MuContext *ctx, MuNode *parent, MuNode *child) {
     if (!parent || !child) return;
-    if (ctx && (child->flags & MU_NODE_VISIBLE)) mu_damage_add(ctx, child->bounds);
+    if (ctx && (child->flags & MU_NODE_VISIBLE)) {
+        mu_damage_add(ctx, child->bounds);
+        mu_damage_add(ctx, child->prev_bounds);
+    }
     for (int i = 0; i < parent->child_count; i++) {
         if (parent->children[i] == child) {
             memmove(&parent->children[i], &parent->children[i + 1],
@@ -189,3 +197,11 @@ void mu_frame_begin(MuContext *ctx) {
 }
 
 void mu_frame_end(MuContext *ctx) { (void)ctx; }
+
+void mu_frame_set_dt(MuContext *ctx, float seconds) {
+    if (ctx) ctx->frame_dt = seconds > 0.f ? seconds : 0.f;
+}
+
+int mu_animating(const MuContext *ctx) {
+    return ctx ? ctx->animating : 0;
+}

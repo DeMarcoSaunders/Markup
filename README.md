@@ -1,14 +1,16 @@
 # MarkUp UI v2
 
-**MarkUp v2** is a small UI layer for **C11** with pluggable render backends: **[Raylib](https://www.raylib.com/)** (default) or **Skia + SDL3** (desktop). You describe a tree of **`MuNode` widgets**, run **flexbox-style layout**, feed **pointer / keyboard** events, and **paint** via a thin renderer API. Libraries split so you link only what you need.
+**MarkUp v2** is a small UI layer for **C11** with pluggable render backends: a **built-in software rasterizer** (default, no GPU) or **Skia + SDL3** (desktop). You describe a tree of **`MuNode` widgets**, run **flexbox-style layout**, feed **pointer / keyboard** events, and **paint** via a thin renderer API. Libraries split so you link only what you need.
 
-Use it for **native HUDs and desktop-style shells**—settings panels, launchers, taskbars, dialogs—without HTML or a heavyweight toolkit. Version 2 is a **focused rewrite** with a clean extension model (**`MuNode` + `MuNodeOps`**). Start with **`apps/demo_minimal/main.c`** (Raylib) or **`apps/demo_skia/main.c`** (full component gallery).
+Use it for **native HUDs and desktop-style shells**—settings panels, launchers, taskbars, dialogs—without HTML or a heavyweight toolkit. Version 2 is a **focused rewrite** with a clean extension model (**`MuNode` + `MuNodeOps`**). Start with **`apps/demo_soft/main.c`** (damage tracking and frosted glass) or **`apps/demo_skia/main.c`** (full component gallery).
+
+> **Raylib is deprecated.** The **[Raylib](https://www.raylib.com/)** backend still builds and **`markup::raylib`** is still exported, but it is off by default (**`-DMARKUP_WITH_RAYLIB=ON`** to opt back in), has no backdrop blur and no test coverage, and will be removed. New code should link **`markup::soft`**.
 
 ---
 
 ## Using Markup in your own project
 
-You always need Raylib initialized before `mu_render_init` (see demos). Beyond that there are three common ways to depend on Markup under CMake.
+Each backend has its own setup before `mu_render_init`: **`markup::soft`** needs only a buffer (`mu_soft_render_init`, or `mu_soft_render_init_borrowed` over a framebuffer you own), while the GPU backends need their window up first (see demos). Beyond that there are three common ways to depend on Markup under CMake.
 
 ### 1. Add Markup inside your repo (`add_subdirectory`)
 
@@ -25,18 +27,17 @@ target_link_libraries(mygame PRIVATE
     markup::layout_flex
     markup::style
     markup::paint
-    markup::raylib
+    markup::soft
     markup::input
     markup::core
-    raylib
 )
 ```
 
 Markup’s CMake sets **include directories automatically** through those targets—the public headers live under **`markup/include/`** and you **`#include "markup/mu_core.h"`** (etc.) after linking.
 
-Your `main.c` does **not** need this repo’s `apps/` helpers unless you want them; demos use `demo_font.c` only to load a bundled TTF. You may use **`GetFontDefault()`** (`mu_render_init` already does until you substitute a font).
+Your `main.c` does **not** need this repo’s `apps/` helpers unless you want them; demos use `demo_font.c` only to load a bundled TTF. On **`markup::soft`**, point `mu_soft_set_font_file` at any TTF — there is no platform font enumeration, because on a bare-metal target there is nothing to enumerate.
 
-**Raylib duplication:** Markup defaults to **`MARKUP_FETCH_RAYLIB=ON`** (it uses `FetchContent` for Raylib 5.x). If *your* project already fetches or `find_package`s Raylib, turn Markup’s fetch off so you only resolve Raylib once:
+**Raylib duplication (deprecated path):** if you opt into **`-DMARKUP_WITH_RAYLIB=ON`**, Markup also defaults to **`MARKUP_FETCH_RAYLIB=ON`** (`FetchContent` for Raylib 5.x). If *your* project already fetches or `find_package`s Raylib, turn Markup’s fetch off so you only resolve Raylib once:
 
 ```cmake
 set(MARKUP_FETCH_RAYLIB OFF CACHE BOOL "" FORCE)
@@ -59,10 +60,8 @@ FetchContent_MakeAvailable(markup_upstream)
 
 add_executable(mygame main.c)
 target_link_libraries(mygame PRIVATE
-    markup::widgets_basic markup::layout_flex markup::style markup::raylib markup::input markup::core raylib)
+    markup::widgets_basic markup::layout_flex markup::style markup::soft markup::input markup::core)
 ```
-
-Treat **`MARKUP_FETCH_RAYLIB` the same as above** if your repo already pulls Raylib.
 
 ---
 
@@ -80,14 +79,29 @@ In your consumer project:
 ```cmake
 cmake_minimum_required(VERSION 3.16)
 find_package(Markup CONFIG REQUIRED PATHS /path/to/markup_install)
-find_package(raylib REQUIRED) # markup::imports expect raylib to exist
 
 add_executable(mygame main.c)
 target_link_libraries(mygame PRIVATE
-    markup::widgets_basic markup::layout_flex markup::style markup::raylib markup::input markup::core raylib)
+    markup::widgets_basic markup::layout_flex markup::style markup::soft markup::input markup::core)
 ```
 
-Exported targets are **`markup::core`**, **`markup::layout_flex`**, **`markup::style`**, **`markup::input`**, **`markup::raylib`**, **`markup::widgets_basic`**. CMake config also wires **`MarkupImportedRaylib.cmake`** so installed **`markup::raylib`** / **`markup::widgets_basic`** find Raylib transitively (`find_dependency`).
+Exported targets are **`markup::core`**, **`markup::layout_flex`**, **`markup::style`**,
+**`markup::input`**, **`markup::paint`**, **`markup::soft`**, **`markup::widgets_basic`**,
+**`markup::compose`**, **`markup::anim`**, **`markup::physics`** and
+**`markup::physics_node`** — the same names `add_subdirectory` and `FetchContent` give you,
+so a consumer reads identically whichever way it depends on Markup. Linking a backend is
+still what selects the `MuRenderContext` layout: `markup::soft` carries `MU_BACKEND_SOFT`
+through the export, so `markup/mu_backend.h` resolves with nothing defined by hand.
+
+**`markup::skia`** and **`markup::sdl`** are *not* installed — they carry external
+dependencies that cannot go through `install(EXPORT)`. Use `add_subdirectory` or
+`FetchContent` for those.
+
+**Deprecated raylib backend:** an install built with **`-DMARKUP_WITH_RAYLIB=ON`** also
+ships **`markup::raylib`**, declared by **`MarkupImportedRaylib.cmake`**, which
+`MarkupConfig.cmake` includes only when it is present — a software-only install never pays
+`find_dependency(raylib REQUIRED)`. A `FetchContent` raylib installs its own config into
+the same prefix, so such a prefix is self-contained.
 
 ---
 
@@ -100,9 +114,9 @@ Roughly:
 3. Build once (or mutate) a **`panel`/`label`/`button`** tree; **`mu_context_set_root`**; optional **`mu_modal_bind_layer`**.
 4. Each frame (order matters):
 
-   **`mu_frame_begin`** → resize root **`bounds`** → **`mu_layout_run`** → **`mu_popups_sync`** (if using popups) → input bridge (**`mu_raylib_frame`** / **`mu_sdl_frame`**) → paint background → **`mu_paint_all`** → **`mu_frame_end`**.
+   **`mu_frame_begin`** → resize root **`bounds`** → **`mu_layout_run`** → **`mu_popups_sync`** (if using popups) → input bridge (**`mu_sdl_frame`** / **`mu_raylib_frame`**) → paint background → **`mu_paint_all`** → **`mu_frame_end`**.
 
-Concrete code mirrors this in **`apps/demo_minimal/main.c`**.
+Concrete code mirrors this in **`apps/demo_soft/main.c`**, which also shows the damage-tracked variant (**`mu_damage_collect`** → **`mu_paint_damaged`**) in place of **`mu_paint_all`**.
 
 See [Getting started](#getting-started) for a copy-pasteable loop snippet.
 
@@ -110,10 +124,10 @@ See [Getting started](#getting-started) for a copy-pasteable loop snippet.
 
 ### Runtime: fonts, images & assets
 
-- **Fonts:** Raylib uses **`Font`** via `mu_render_set_font`; Skia loads TTF with `mu_skia_set_font_file` / `mu_font_load_file`. Demos bundle **Inter** under **`apps/demo_minimal/assets/`**.
+- **Fonts:** the software backend loads TTF/OTF with `mu_soft_set_font_file`; Skia uses `mu_skia_set_font_file` / `mu_font_load_file`; raylib (deprecated) takes a **`Font`** via `mu_render_set_font`. Demos bundle **Inter** under **`apps/demo_minimal/assets/`**.
 - **Images:** `mu_image_load_file(&rc, path)` returns a texture id (`MU_IMAGE_INVALID` = 0). Decoding uses vendored **stb_image** in `markup_paint` — PNG, JPEG and BMP, no external dependency. `mu_image_decode_last_error()` reports why a load failed. Supports atlas slices via `mu_image_set_src_rect` and `MuImageSheet` grid helpers.
 - **Asset paths:** load from **`assets/`** next to the executable. Demos **`POST_BUILD` copy** `apps/demo_minimal/assets/` into the output folder. Use absolute fallbacks in dev if cwd differs (see `MARKUP_DEMO_FONT_FILE_ABS` in Skia demo).
-- **Vector paths:** `mu_path_move_to` / `mu_path_line_to` / `mu_path_close` build a `MuPath`; `mu_draw_path(&rc, &path, &opts)` fills and/or strokes it (soft, Skia, Raylib). No curves yet — polylines only.
+- **Vector paths:** `mu_path_move_to` / `mu_path_line_to` / `mu_path_close` build a `MuPath`; `mu_draw_path(&rc, &path, &opts)` fills and/or strokes it (soft, Skia, raylib). No curves yet — polylines only.
 
 ---
 
@@ -143,9 +157,13 @@ Call `mu_list_register` / `mu_tabs_register` / `mu_popup_register` after `mu_wid
 
 High-level factories in **`markup/mu_compose.h`** — no new node kinds:
 
-- **`mu_compose_card`**, **`mu_compose_flow`**, **`mu_compose_scroll_column`**, **`mu_compose_list`**, **`mu_compose_tabs`**
-- **`MuIconDesc`** — parameterized icons for **`mu_compose_icon`**, **`mu_compose_icon_chip`**, **`mu_compose_icon_strip`** (taskbar), **`mu_compose_icon_carousel`**
-- **`mu_compose_app_tile`**, **`mu_compose_icon_label`** (wrappers around icon chip / row)
+- **`mu_compose_flow`** (wrapping row), **`mu_compose_list`**, **`mu_compose_tabs`**
+- **`MuIconDesc`** + **`mu_icon_desc_init`** — parameterized icons for **`mu_compose_icon_chip`**, **`mu_compose_icon_strip`** (taskbar), **`mu_compose_icon_carousel`**
+- **`mu_compose_decorative`** — marks a child unhittable so the parent keeps the click
+
+That is the whole header. There is no card, tile or scroll-column factory: a titled card is
+**`mu_make_panel`** plus a label, which is what **`apps/demo_skia/main.c`** does, and a
+scrollable column is **`mu_make_scroll`**.
 
 **Agent skill:** [`.cursor/skills/markup-compose/SKILL.md`](.cursor/skills/markup-compose/SKILL.md) — patterns for AI agents.
 
@@ -154,9 +172,9 @@ High-level factories in **`markup/mu_compose.h`** — no new node kinds:
 | Target | Backend | Highlights |
 |--------|---------|------------|
 | **`demo_skia`** | Skia + SDL3 | Full gallery: icons, taskbar, carousel, list, tabs, popup dropdown, themes |
-| **`demo_minimal`** | Raylib | Baseline loop, modal, toast |
-| **`demo_retheme`** | Raylib | Two themes via `MuStyleModule` swap |
-| **`demo_soft`** | Software (no GPU) | Damage-tracked loop, frosted glass, spring-animated card, button hover lift, scroll rubber-banding, custom node kind, `--shot <file.bmp>` |
+| **`demo_minimal`** | Raylib *(deprecated, `-DMARKUP_WITH_RAYLIB=ON`)* | Baseline loop, modal, toast |
+| **`demo_retheme`** | Raylib *(deprecated, `-DMARKUP_WITH_RAYLIB=ON`)* | Two themes via `MuStyleModule` swap |
+| **`demo_soft`** | Software (no GPU) | Damage-tracked loop, frosted glass, spring-animated card, button hover lift, spring scrolling with rubber-banding, custom node kind, `--shot <file.bmp>` |
 | **`demo_physics`** | Software (no GPU) | Rigid bodies driving node bounds; click to drop, `--shot <file.bmp>` |
 
 ### Rendering without a GPU
@@ -183,21 +201,17 @@ rate and never needs a stepped integrator.
 
 See **[ANIMATION.md](ANIMATION.md)**.
 
-### Optional stubs (not implemented)
-
-**`MARKUP_WITH_STYLE_FILE`**, **`MARKUP_WITH_EXTRA_WIDGETS`**.
-
 ### Known gaps
 
 Multiline textinput, text selection, copy/paste, tree, tooltips, SVG.
-Backdrop blur is real only on `markup::soft`; raylib and Skia degrade to a flat tint.
+Backdrop blur is real only on `markup::soft`; Skia and raylib degrade to a flat tint.
 
 ---
 
 ## Getting started
 
-1. **Build** the repo ([Build](#build)), then run **`demo_skia`** or **`demo_minimal`** from the **executable’s folder** so copied **`assets/`** is available.
-2. **Read** **`apps/demo_skia/main.c`** (gallery) or **`apps/demo_minimal/main.c`** (minimal Raylib loop).
+1. **Build** the repo ([Build](#build)) with **`-DMARKUP_WITH_SDL=ON`**, then run **`demo_soft`** from the **executable’s folder** so copied **`assets/`** is available.
+2. **Read** **`apps/demo_soft/main.c`** (damage tracking, glass, springs) or **`apps/demo_skia/main.c`** (full gallery).
 3. Initialise the window/backend before creating **`MuRenderContext`** and loading fonts/images.
 
 Minimal frame loop excerpt:
@@ -246,15 +260,15 @@ CloseWindow();
 | `markup::core` | `MuContext`, `MuNode` tree, node kind registry, arenas, modal stack hooks |
 | `markup::layout_flex` | `mu_layout_run` — flex layout, stretch, wrap, grow/shrink |
 | `markup::style` | `MuStyleModule` tokens, `mu_style_resolve` from `MuNode.role`, label word-wrap |
-| `markup::paint` | `mu_paint_all`, `mu_paint_damaged`, damage collection, `mu_image_util`, image decode via stb_image (`mu_image_decode_*`) |
+| `markup::paint` | `mu_paint_all`, `mu_paint_damaged`, damage collection and the `MuRegion` helpers, image geometry (`mu_image_fit_dst`, `mu_image_resolve_src`), image decode via stb_image (`mu_image_decode_*`) |
 | `markup::input` | Hover/focus, modal routing, pointer/key/text dispatch |
 | `markup::compose` | `mu_compose_*`, `MuIconDesc` factories |
 | `markup::soft` | CPU rasterizer — ARGB8888 surface, AA rounded rects, stb_truetype text, backdrop blur ([RENDERING.md](RENDERING.md)) |
-| `markup::raylib` | Raylib `MuRenderContext`, `mu_draw_*`, `mu_raylib_frame` |
+| `markup::raylib` | **Deprecated** — Raylib `MuRenderContext`, `mu_draw_*`, `mu_raylib_frame`. No backdrop blur, no tests, off by default (`mu_raylib.h`) |
 | `markup::skia` + `markup::sdl` | Skia raster backend + SDL3 window/input (`MARKUP_WITH_SKIA`) |
 | `markup::physics` | 2D rigid bodies — SAT collision, sequential impulses, split-impulse resolution ([PHYSICS.md](PHYSICS.md)) |
 | `markup::physics_node` | `physics_world` kind — bodies drive node bounds; the only file joining physics to the tree |
-| `markup::anim` | `MuSpring` + `MuAnimator` — closed-form spring motion, node bounds keyed by id ([ANIMATION.md](ANIMATION.md)) |
+| `markup::anim` | `MuAnimator` — springs node bounds, keyed by id. `MuSpring` itself is in `markup::core`, so widgets animate their own `paint_offset` (hover lift, spring scrolling) without it ([ANIMATION.md](ANIMATION.md)) |
 | `markup::widgets_basic` | Built-in widget kinds and **`mu_make_*`** factories |
 
 Each visible node uses a **`uint32_t` kind id** wired to **`MuNodeOps`** (measure / layout / paint / hit-test / input). Flex containers (**`MU_NODE_FLEX_CONTAINER`**) use **`mu_layout_flex`**.
@@ -301,15 +315,11 @@ MuNode *dock = mu_compose_icon_strip(ctx, &rc, items, 4, 8.f);
 
 Sprite sheet: `mu_image_sheet_load(&sheet, &rc, path, cell_w, cell_h, cols)` then `d.src = mu_image_sheet_cell(&sheet, i)`.
 
-### Launcher tile (shortcut)
-
-```c
-MuNode *tile = mu_compose_app_tile(ctx, icon_id, "Files", on_launch, user);
-```
-
 ### Desktop shell layout (Skia demo)
 
-Root **column**: toolbar → body (`flex: 1`) → taskbar. Body **row** of `mu_compose_card` children with `flex: 1 1 0` and `align-items: stretch`. Labels wrap inside cards when width is bounded.
+Root **column**: toolbar → body (`flex: 1`) → taskbar. Body is a **row** of `mu_make_panel`
+children with `flex: 1 1 0` and `align-items: stretch`. Labels wrap inside them when width is
+bounded.
 
 Register a new node kind only when you need **new behavior** (e.g. drag-resize handles), not for layout patterns.
 
@@ -319,7 +329,7 @@ Register a new node kind only when you need **new behavior** (e.g. drag-resize h
 
 Extend Markup by **registering a node kind** and **creating nodes** with **`mu_node_create`**. Patterns live in **`markup/src/mu_widgets_basic.c`**.
 
-1. **Where to put code**: either **`mu_widgets_extra`** (optional stub target **`MARKUP_WITH_EXTRA_WIDGETS`**) / fork **`mu_widgets_basic`**, **or register from your app** with **`mu_register_node_kind`** — no upstream patch required.
+1. **Where to put code**: either fork **`mu_widgets_basic`**, **or register from your app** with **`mu_register_node_kind`** — no upstream patch required, and nothing in Markup needs to know the kind exists.
 
 2. **Implement `MuNodeOps`**: `measure`, optional `layout_children`, `paint`, optionally `hit_test` / `on_pointer` / `on_key` / `on_char`, and `destroy_state` for **`node->state`**.
 
@@ -339,7 +349,7 @@ mu_node_add_child(ctx, parent, n);
 
 ## Build
 
-Requirements: CMake **3.16+**, **C11** compiler, Git (for **`FetchContent` Raylib**, default **ON**).
+Requirements: CMake **3.16+**, **C11** compiler. Git too, if you enable a fetched dependency (**`FetchContent`** for SDL3, or for Raylib on the deprecated path). The default build needs no third-party library at all.
 
 ### MSVC (Windows)
 
@@ -356,7 +366,7 @@ cmake --build build --config Release
 Without presets:
 
 ```powershell
-cmake -G "Visual Studio 18 2026" -A x64 -S . -B build -DMARKUP_FETCH_RAYLIB=ON
+cmake -G "Visual Studio 18 2026" -A x64 -S . -B build -DMARKUP_WITH_SDL=ON
 cmake --build build --config Release
 ```
 
@@ -372,18 +382,27 @@ Use matching generators for older VS (e.g. **Visual Studio 17 2022**).
 ### Generic (Ninja / Makefile)
 
 ```bash
-cmake -S . -B build -DMARKUP_FETCH_RAYLIB=ON
+cmake -S . -B build -DMARKUP_WITH_SDL=ON
 cmake --build build --config Release
 ```
 
 CMake options:
 
-- **`MARKUP_FETCH_RAYLIB`** (default ON) — Raylib 5.0 via FetchContent. OFF → **`find_package(raylib REQUIRED)`**.
-- **`MARKUP_WITH_SKIA`** (default OFF) — Skia + SDL3 backend and **`demo_skia`**. Uses vcpkg manifest (`skia` with PNG, `libpng`, `sdl3`).
-- **`MARKUP_FETCH_SDL3`** (default ON when Skia) — Fetch SDL3; OFF → **`find_package(SDL3)`**.
-- **`MARKUP_WITH_STYLE_FILE`**, **`MARKUP_WITH_EXTRA_WIDGETS`** — optional stub libs.
+- **`MARKUP_WITH_SDL`** (default OFF) — SDL3 window harness plus **`demo_soft`** and **`demo_physics`**. This is the flag you want to see the software backend on screen.
+- **`MARKUP_WITH_SKIA`** (default OFF) — Skia + SDL3 backend and **`demo_skia`**. Uses vcpkg manifest (`skia` with PNG, `libpng`, `sdl3`). Implies **`MARKUP_WITH_SDL`**.
+- **`MARKUP_FETCH_SDL3`** (default ON when SDL or Skia) — Fetch SDL3; OFF → **`find_package(SDL3)`**.
+- **`MARKUP_BUILD_TESTS`** (default ON) — the `ctest` suite. Needs no GPU library. It
+  includes **`install_consumer`**, which installs to a throwaway prefix under the build
+  tree and builds a standalone `find_package(Markup)` project against it — the only test
+  that exercises the installed package rather than the in-build targets. On Windows with
+  `MARKUP_WITH_RAYLIB=ON`, a second link-only **`install_consumer_raylib`** runs too —
+  Windows because that is where the platform libraries raylib's own installed config
+  omits have been worked out. Each does a nested configure and build, so they take seconds
+  rather than milliseconds.
+- **`MARKUP_WITH_RAYLIB`** (default **OFF**, *deprecated*) — the Raylib backend plus **`demo_minimal`** and **`demo_retheme`**. Configuring with it on emits a CMake deprecation warning.
+- **`MARKUP_FETCH_RAYLIB`** (default ON) — only consulted when the above is on: Raylib 5.0 via FetchContent. OFF → **`find_package(raylib REQUIRED)`**.
 
-`markup_soft` needs no options and no third-party dependency of its own; it builds by default, and neither it nor `demo_soft` nor any test links a GPU library.
+`markup_soft` needs no options and no third-party dependency of its own; it and the whole test suite build by default, and neither links a GPU library. Add **`-DMARKUP_WITH_SDL=ON`** when you want a window to put it in.
 
 ### Skia desktop (Windows)
 

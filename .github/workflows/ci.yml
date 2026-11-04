@@ -17,20 +17,53 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux GL deps
+      # CMAKE_BUILD_TYPE is passed explicitly on every configure below. Visual Studio
+      # takes the config at build time and ignores it, but the single-config generators
+      # the Linux runner uses do not: without it those builds carry no build type at all
+      # (unoptimised), and $<CONFIG> expands to nothing, which the install tests resolve
+      # the config through.
+
+      # The default build is the software backend and the test suite: no GPU, no
+      # windowing library, no fetched dependency. Deliberately no apt step before it --
+      # if this job ever needs one, that claim has stopped being true.
+      - name: Configure (default — software backend only)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      # Building the tests without running them is most of the cost and none of the
+      # value. This is also the only place install_consumer runs, and it is the only test
+      # that can see a broken install(EXPORT) -- every other test links the in-build
+      # targets, where that is invisible.
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Configure (optional modules)
+        run: cmake -S . -B build_full -DCMAKE_BUILD_TYPE=Release -DMARKUP_WITH_STYLE_FILE=ON -DMARKUP_WITH_EXTRA_WIDGETS=ON
+
+      # Build only: the stub libraries add no tests, and the suite above already ran.
+      - name: Build full preset
+        run: cmake --build build_full --config Release
+
+      # The deprecated raylib backend. Kept in CI only so it does not rot into a
+      # non-compiling state again while it is still shipped; drop this job with it.
+      - name: Install Linux GL deps (raylib only)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libglfw3-dev libgl1-mesa-dev libglu1-mesa-dev xorg-dev
 
-      - name: Configure (minimal link)
-        run: cmake -S . -B build -DMARKUP_FETCH_RAYLIB=ON
+      - name: Configure (deprecated raylib backend)
+        run: cmake -S . -B build_raylib -DCMAKE_BUILD_TYPE=Release -DMARKUP_WITH_RAYLIB=ON -Wno-deprecated
 
-      - name: Build
-        run: cmake --build build --config Release
+      - name: Build raylib backend
+        run: cmake --build build_raylib --config Release
 
-      - name: Configure (optional modules)
-        run: cmake -S . -B build_full -DMARKUP_FETCH_RAYLIB=ON -DMARKUP_WITH_BLUR=ON -DMARKUP_WITH_STYLE_FILE=ON -DMARKUP_WITH_EXTRA_WIDGETS=ON
-
-      - name: Build full preset
-        run: cmake --build build_full --config Release
+      # On Windows this adds install_consumer_raylib, which link-tests markup::raylib out
+      # of an installed prefix. CMakeLists gates that test to WIN32 -- the platform
+      # libraries raylib's installed config omits have only been worked out there -- so on
+      # Linux this step re-runs the standard suite and nothing more. Left unconditional so
+      # that lifting the guard needs no change here.
+      - name: Test raylib backend
+        run: ctest --test-dir build_raylib -C Release --output-on-failure

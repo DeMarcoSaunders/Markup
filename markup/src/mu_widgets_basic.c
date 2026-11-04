@@ -7,6 +7,7 @@
 #include "../include/markup/mu_input.h"
 #include "../include/markup/mu_popup.h"
 #include "../include/markup/mu_compose.h"
+#include "../include/markup/mu_spring.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -70,6 +71,9 @@ typedef struct MuButtonState {
     char *text;
     void (*on_click)(void *);
     void *user;
+    /* Pixels to rise while hovered; 0 = off. The spring drives node->paint_offset.y. */
+    float hover_lift;
+    MuSpring lift;
 } MuButtonState;
 
 typedef struct MuSliderState {
@@ -305,6 +309,23 @@ static void button_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     mu_draw_text(rc, t, tx, ty, &st.text, st.foreground);
 }
 
+/*
+ * Hover lift. The rise is a paint_offset, never a change to bounds: hit testing reads
+ * bounds, so moving those would carry the button out from under a pointer resting near
+ * its bottom edge, drop the hover, fall back under the pointer, and flicker.
+ */
+static bool button_animate(MuContext *ctx, MuNode *node, float dt) {
+    (void)ctx;
+    MuButtonState *s = (MuButtonState *)node->state;
+    if (!s) return false;
+    /* Off and already down: the common case costs one comparison. */
+    if (s->hover_lift <= 0.f && s->lift.value == 0.f) return false;
+    float target = (node->flags & MU_NODE_HOVERED) ? -s->hover_lift : 0.f;
+    bool moving = mu_spring_follow(&s->lift, target, dt);
+    node->paint_offset.y = s->lift.value;
+    return moving;
+}
+
 static const MuNodeOps button_ops = {.destroy_state = button_destroy,
                                      .measure = button_measure,
                                      .layout_children = NULL,
@@ -312,7 +333,8 @@ static const MuNodeOps button_ops = {.destroy_state = button_destroy,
                                      .hit_test = button_pt_in,
                                      .on_pointer = button_ptr,
                                      .on_key = NULL,
-                                     .on_char = NULL};
+                                     .on_char = NULL,
+                                     .animate = button_animate};
 
 /* --- Slider --- */
 static void slider_destroy(MuContext *ctx, MuNode *node) {
@@ -736,6 +758,12 @@ uint32_t mu_kind_button(const MuContext *ctx) {
     const MuWidgetsBasicKindIds *k = wb_kinds(ctx);
     return k ? k->button : 0;
 }
+
+void mu_button_set_hover_lift(MuContext *ctx, MuNode *button, float pixels) {
+    if (!ctx || !button || button->kind != mu_kind_button(ctx)) return;
+    MuButtonState *s = (MuButtonState *)button->state;
+    if (s) s->hover_lift = pixels > 0.f ? pixels : 0.f;
+}
 uint32_t mu_kind_slider(const MuContext *ctx) {
     const MuWidgetsBasicKindIds *k = wb_kinds(ctx);
     return k ? k->slider : 0;
@@ -831,6 +859,7 @@ MuNode *mu_make_button(MuContext *ctx, const char *text, void (*cb)(void *), voi
     s->text = dup_cstr(text ? text : "OK");
     s->on_click = cb;
     s->user = user;
+    mu_spring_init(&s->lift, 0.f, 0.15f, MU_SPRING_SNAPPY);
     MuNode *n = mu_node_create(ctx, k->button, s);
     if (!n) {
         free(s->text);

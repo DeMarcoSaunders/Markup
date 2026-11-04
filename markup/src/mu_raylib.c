@@ -251,9 +251,14 @@ void mu_backdrop_cache_drop(MuRenderContext *rc, const MuNode *node) {
 }
 
 void mu_render_logical_size(MuRenderContext *rc, int *out_w, int *out_h) {
-    /* No scaling on this backend: logical units are pixels. */
-    if (out_w) *out_w = rc ? rc->width : 0;
-    if (out_h) *out_h = rc ? rc->height : 0;
+    /* No scaling on this backend: logical units are pixels.
+     *
+     * The size comes from raylib rather than from the context, which carries no surface
+     * of its own -- this backend draws straight into the window raylib owns. Asking
+     * raylib also means a resize needs no bookkeeping here. */
+    (void)rc;
+    if (out_w) *out_w = GetScreenWidth();
+    if (out_h) *out_h = GetScreenHeight();
 }
 
 const void *mu_present_pixel_data(MuRenderContext *rc, int *out_w, int *out_h, int *out_row_bytes) {

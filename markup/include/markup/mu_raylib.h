@@ -1,6 +1,23 @@
 #ifndef MU_RAYLIB_H
 #define MU_RAYLIB_H
 
+/*
+ * DEPRECATED. Use mu_soft.h (markup_soft) instead.
+ *
+ * This backend is kept building for existing consumers and is no longer developed. What
+ * it does not do, none of it planned:
+ *
+ *   - No backdrop blur. mu_draw_backdrop_blur degrades to a flat tint, and the backdrop
+ *     cache entry points are no-ops, so frosted glass renders as a solid panel.
+ *   - No host-readable framebuffer. mu_present_pixel_data returns NULL, so the shared
+ *     mu_sdl window harness cannot drive it.
+ *   - No test coverage at all. Nothing in tests/ links it, which is how it drifted
+ *     behind the backend interface far enough to stop compiling.
+ *
+ * Damage tracking does work, since mu_paint_damaged is backend-neutral, but there is no
+ * partial clear to pair with it the way mu_soft_begin_frame_region does.
+ */
+
 /* Backends declare incompatible `struct MuRenderContext` layouts; only one may be visible. */
 #ifdef MU_RENDER_BACKEND_SELECTED
 #error "Markup: another backend header is already included in this translation unit. struct MuRenderContext layouts conflict; include only one backend (see mu_backend.h)."

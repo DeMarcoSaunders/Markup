@@ -40,6 +40,10 @@ typedef struct Fixture {
     MuNode *button;
     MuNode *check;
     MuNode *slider;
+    /* Rects in the damage region on the last frame() call. Recorded because the region
+     * is reset before frame() returns, and a test that cannot see this number cannot
+     * tell a real region from a single union rect. */
+    int last_rects;
 } Fixture;
 
 static void fixture_init(Fixture *f) {
@@ -72,7 +76,14 @@ static void fixture_free(Fixture *f) {
 
 static const MuColor BG = {30, 30, 36, 255};
 
-/** One frame: collect, clear+paint the damage, reset. Returns the damage rect used. */
+/**
+ * One frame: collect, clear+paint the damage region, reset. Returns its bounding box.
+ *
+ * The clear goes through the region rather than the bounding box deliberately. Clearing
+ * the box while painting only the region would leave flat-coloured holes everywhere the
+ * region is not solid, and test_ab_matches_full_repaint would see those as pixel
+ * mismatches -- so the pairing of clear and paint is itself under test here.
+ */
 static MuRect frame(Fixture *f, bool *out_painted) {
     mu_frame_begin(&f->ctx);
     mu_layout_run(&f->ctx);
@@ -80,9 +91,10 @@ static MuRect frame(Fixture *f, bool *out_painted) {
 
     MuRect area = {0, 0, 0, 0};
     bool painted = !mu_damage_empty(&f->ctx);
+    f->last_rects = mu_region_count(mu_damage_region(&f->ctx));
     if (painted) {
         area = mu_damage_rect(&f->ctx);
-        mu_soft_begin_frame_rect(&f->rc, BG, area);
+        mu_soft_begin_frame_region(&f->rc, BG, mu_damage_region(&f->ctx));
         mu_paint_damaged(&f->ctx, &f->rc);
     }
     mu_damage_reset(&f->ctx);
@@ -94,6 +106,17 @@ static MuRect frame(Fixture *f, bool *out_painted) {
 static bool rect_contains(MuRect outer, MuRect inner) {
     return inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.w <= outer.x + outer.w &&
            inner.y + inner.h <= outer.y + outer.h;
+}
+
+static bool rect_overlaps(MuRect a, MuRect b) {
+    return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+/** True if one single rect of the region covers `r`. */
+static bool region_covers_in_one(const MuRegion *rg, MuRect r) {
+    for (int i = 0; i < mu_region_count(rg); i++)
+        if (rect_contains(mu_region_rect(rg, i), r)) return true;
+    return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -694,7 +717,282 @@ static void test_backdrop_cache_drop_forces_recompute(void) {
     fixture_free(&f);
 }
 
+/* ---------------- damage region ---------------- */
+
+/**
+ * The region's own invariants, over a fixed pseudo-random sequence of adds.
+ *
+ * Both are silent-corruption bugs if broken, which is why they are asserted directly
+ * rather than inferred from pixels. Overlapping rects would make mu_paint_damaged visit
+ * a pixel twice and double-blend anything translucent over it. And a rect that ended up
+ * covered only *collectively* would be painted in pieces, each piece clipped to a
+ * different rect -- fine for flat fills, wrong for anything that samples its
+ * surroundings, which is exactly what a backdrop blur does.
+ *
+ * The sequence is deterministic so a failure is reproducible.
+ */
+static uint32_t lcg(uint32_t *state) {
+    *state = *state * 1664525u + 1013904223u;
+    return *state >> 8;
+}
+
+static void test_region_add_invariants(void) {
+    CASE("region rects stay disjoint and each add lands in one rect");
+    uint32_t seed = 0x5eed1234u;
+
+    for (int trial = 0; trial < 300; trial++) {
+        MuRegion rg;
+        mu_region_clear(&rg);
+
+        MuRect added[48];
+        int n = 1 + (int)(lcg(&seed) % 48u);
+        for (int k = 0; k < n; k++) {
+            MuRect r = {(float)(lcg(&seed) % 300u), (float)(lcg(&seed) % 200u),
+                        1.f + (float)(lcg(&seed) % 40u), 1.f + (float)(lcg(&seed) % 30u)};
+            added[k] = r;
+            mu_region_add(&rg, r);
+        }
+
+        int count = mu_region_count(&rg);
+        CHECK(count > 0 && count <= MU_DAMAGE_MAX_RECTS);
+
+        for (int i = 0; i < count; i++) {
+            for (int j = i + 1; j < count; j++) {
+                bool disjoint = !rect_overlaps(mu_region_rect(&rg, i), mu_region_rect(&rg, j));
+                CHECK(disjoint);
+                if (!disjoint) {
+                    MuRect a = mu_region_rect(&rg, i), b = mu_region_rect(&rg, j);
+                    printf("       trial %d rects %d/%d overlap: %.0f,%.0f %.0fx%.0f and "
+                           "%.0f,%.0f %.0fx%.0f\n",
+                           trial, i, j, a.x, a.y, a.w, a.h, b.x, b.y, b.w, b.h);
+                    return;
+                }
+            }
+        }
+
+        for (int k = 0; k < n; k++) {
+            if (!region_covers_in_one(&rg, added[k])) {
+                printf("FAIL [%s] trial %d: added %.0f,%.0f %.0fx%.0f is in no single rect\n",
+                       g_case, trial, added[k].x, added[k].y, added[k].w, added[k].h);
+                g_failures++;
+                return;
+            }
+        }
+    }
+}
+
+/** An empty region reports nothing and hands back a degenerate box, not garbage. */
+static void test_region_empty(void) {
+    CASE("empty region");
+    MuRegion rg;
+    mu_region_clear(&rg);
+    CHECK(mu_region_empty(&rg));
+    CHECK(mu_region_count(&rg) == 0);
+    MuRect b = mu_region_bounds(&rg);
+    CHECK(b.w == 0.f && b.h == 0.f);
+    CHECK(!mu_region_overlaps(&rg, (MuRect){0.f, 0.f, 10.f, 10.f}));
+
+    /* A degenerate rect carries no pixels, so it must not become a rect in the region. */
+    mu_region_add(&rg, (MuRect){5.f, 5.f, 0.f, 10.f});
+    CHECK(mu_region_empty(&rg));
+}
+
+/**
+ * Two nodes set up on the modal layer, which mu_layout_run never touches, so their
+ * bounds stay exactly where they are put. `n` panels on a grid with gaps between them,
+ * none touching another, each independently markable.
+ */
+static MuNode *grid_setup(Fixture *f, MuNode **out, int cols, int rows, float cell, float size) {
+    MuNode *overlay = mu_make_panel(&f->ctx, true);
+    overlay->role = "group";
+    mu_modal_bind_layer(&f->ctx, overlay);
+    mu_node_set_bounds(overlay, (MuRect){0.f, 0.f, (float)W, (float)H});
+
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++) {
+            MuNode *p = mu_make_panel(&f->ctx, true);
+            p->role = "group";
+            mu_node_add_child(&f->ctx, overlay, p);
+            mu_node_set_bounds(p, (MuRect){2.f + (float)c * cell, 2.f + (float)r * cell, size, size});
+            out[r * cols + c] = p;
+        }
+
+    for (int i = 0; i < 3; i++) frame(f, NULL); /* settle the snapshots */
+    return overlay;
+}
+
+/**
+ * The test the old single-rect damage could not pass, and the reason for the whole type.
+ *
+ * Two changes at opposite corners of the surface have to stay two rects. Under the union
+ * rect they collapsed into one covering nearly the entire window, so every pixel between
+ * them was cleared, repainted and re-blurred for nothing -- and the whole existing suite
+ * passed anyway, which is why this assertion is on the rect count and the area, not on
+ * the pixels.
+ */
+static void test_opposite_corners_stay_two_rects(void) {
+    CASE("opposite-corner changes stay two rects");
+    Fixture f;
+    fixture_init(&f);
+
+    MuNode *cells[4];
+    /* 2x2 grid spanning the surface: only the two diagonal cells are touched. */
+    grid_setup(&f, cells, 2, 2, (float)(W - 34) * 0.5f, 30.f);
+    MuNode *tl = cells[0], *br = cells[3];
+
+    MuRect a = tl->bounds, b = br->bounds;
+    CHECK(!rect_overlaps(a, b));
+    CHECK(f.last_rects == 0); /* settled: the grid is quiet before we touch it */
+
+    mu_node_mark_paint_dirty(tl);
+    mu_node_mark_paint_dirty(br);
+    frame(&f, NULL);
+
+    CHECK(f.last_rects == 2);
+    if (f.last_rects != 2)
+        printf("       two corner changes produced %d rect(s) -- a union rect would say 1\n",
+               f.last_rects);
+
+    /* Collapsing to the bounding box would have cost this much. The two rects together
+     * must be a small fraction of it, or the region is not buying anything. */
+    MuRect box = {a.x, a.y, b.x + b.w - a.x, b.y + b.h - a.y};
+    float painted = a.w * a.h + b.w * b.h;
+    CHECK(painted < box.w * box.h * 0.5f);
+
+    fixture_free(&f);
+}
+
+/**
+ * ...and the rects still have to cover both nodes. The count assertion above is happy
+ * with two rects covering the wrong places, so this pins down what they contain: each
+ * node inside a single rect, and the bounding box over both.
+ */
+static void test_opposite_corners_cover_both_nodes(void) {
+    CASE("opposite-corner rects still cover both nodes");
+    Fixture f;
+    fixture_init(&f);
+
+    MuNode *cells[4];
+    grid_setup(&f, cells, 2, 2, (float)(W - 34) * 0.5f, 30.f);
+    MuNode *tl = cells[0], *br = cells[3];
+
+    mu_node_mark_paint_dirty(tl);
+    mu_node_mark_paint_dirty(br);
+
+    mu_frame_begin(&f.ctx);
+    mu_layout_run(&f.ctx);
+    mu_damage_collect(&f.ctx);
+
+    const MuRegion *rg = mu_damage_region(&f.ctx);
+    CHECK(region_covers_in_one(rg, tl->bounds));
+    CHECK(region_covers_in_one(rg, br->bounds));
+    CHECK(rect_contains(mu_damage_rect(&f.ctx), tl->bounds));
+    CHECK(rect_contains(mu_damage_rect(&f.ctx), br->bounds));
+
+    mu_damage_reset(&f.ctx);
+    mu_frame_end(&f.ctx);
+    fixture_free(&f);
+}
+
+/**
+ * More scattered changes than the region can hold, compared pixel for pixel against a
+ * forced full repaint.
+ *
+ * Past the cap mu_region_add merges rather than drops, so the result is coarser than
+ * asked for but never smaller. Coarser is invisible here; dropping a rect would show up
+ * at once as stale pixels. The overflow assertion is what gives this teeth -- without it
+ * the test would pass just as happily if the cap were never reached.
+ */
+static void test_region_overflow_renders_correctly(void) {
+    CASE("damage past the rect cap still renders correctly");
+    Fixture partial, full;
+    fixture_init(&partial);
+    fixture_init(&full);
+    full.ctx.damage_force_all = true;
+
+    enum { COLS = 7, ROWS = 5, CELLS = COLS * ROWS };
+    Fixture *fs[2] = {&partial, &full};
+    MuNode *cells[2][CELLS];
+    for (int i = 0; i < 2; i++) grid_setup(fs[i], cells[i], COLS, ROWS, 40.f, 24.f);
+
+    /* More cells than slots, or there is no overflow to test. */
+    CHECK(CELLS > MU_DAMAGE_MAX_RECTS);
+
+    int max_rects = 0;
+    for (int step = 0; step < 6; step++) {
+        for (int i = 0; i < 2; i++) {
+            /* Touch every cell: scattered, non-adjacent damage all over the surface. */
+            for (int k = 0; k < CELLS; k++) cells[i][k]->flags ^= MU_NODE_HOVERED;
+            frame(fs[i], NULL);
+        }
+        if (partial.last_rects > max_rects) max_rects = partial.last_rects;
+
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                MuColor a = mu_soft_get_pixel(&partial.rc, x, y);
+                MuColor b = mu_soft_get_pixel(&full.rc, x, y);
+                if (a.r != b.r || a.g != b.g || a.b != b.b || a.a != b.a) {
+                    printf("FAIL [%s] step %d pixel (%d,%d): partial {%u,%u,%u,%u} vs full "
+                           "{%u,%u,%u,%u}\n",
+                           g_case, step, x, y, a.r, a.g, a.b, a.a, b.r, b.g, b.b, b.a);
+                    g_failures++;
+                    goto done;
+                }
+            }
+    }
+
+    CHECK(max_rects == MU_DAMAGE_MAX_RECTS);
+    if (max_rects != MU_DAMAGE_MAX_RECTS)
+        printf("       %d cells filled only %d of %d slots -- the cap was never reached\n", CELLS,
+               max_rects, MU_DAMAGE_MAX_RECTS);
+done:
+    fixture_free(&partial);
+    fixture_free(&full);
+}
+
+/**
+ * Glass with scattered damage around it. A blurred node has to end up inside one rect,
+ * never split across two -- each rect is painted under its own scissor, so half the node
+ * would blur against the other half's stale pixels and the two halves would disagree.
+ */
+static void test_glass_lands_in_one_rect(void) {
+    CASE("glass plus its blur reach lands in a single rect");
+    Fixture f;
+    fixture_init(&f);
+
+    MuNode *glass = mu_make_panel(&f.ctx, true);
+    glass->role = "glass";
+    mu_node_set_backdrop_blur(glass, 10.f);
+    mu_node_add_child(&f.ctx, f.root, glass);
+    for (int i = 0; i < 3; i++) frame(&f, NULL);
+
+    /* Damage scattered across the surface as well as on the glass, so the region has
+     * several rects and the glass could plausibly straddle two of them. */
+    mu_node_mark_paint_dirty(glass);
+    mu_node_mark_paint_dirty(f.button);
+    mu_node_mark_paint_dirty(f.check);
+    mu_node_mark_paint_dirty(f.slider);
+
+    mu_frame_begin(&f.ctx);
+    mu_layout_run(&f.ctx);
+    mu_damage_collect(&f.ctx);
+
+    const MuRegion *rg = mu_damage_region(&f.ctx);
+    MuRect g = glass->bounds;
+    MuRect reach = {g.x - 11.f, g.y - 11.f, g.w + 22.f, g.h + 22.f};
+    CHECK(region_covers_in_one(rg, reach));
+    if (!region_covers_in_one(rg, reach))
+        printf("       glass+reach %.0f,%.0f %.0fx%.0f spans more than one of %d rects\n", reach.x,
+               reach.y, reach.w, reach.h, mu_region_count(rg));
+
+    mu_damage_reset(&f.ctx);
+    mu_frame_end(&f.ctx);
+    fixture_free(&f);
+}
+
 int main(void) {
+    test_region_empty();
+    test_region_add_invariants();
     test_first_frame_damages_everything();
     test_idle_frame_damages_nothing();
     test_hover_damages_only_that_node();
@@ -711,6 +1009,10 @@ int main(void) {
     test_glass_over_moving_backdrop_matches_recompute();
     test_backdrop_change_while_hidden_still_invalidates();
     test_backdrop_cache_drop_forces_recompute();
+    test_opposite_corners_stay_two_rects();
+    test_opposite_corners_cover_both_nodes();
+    test_region_overflow_renders_correctly();
+    test_glass_lands_in_one_rect();
 
     if (g_failures) {
         printf("\n%d check(s) failed\n", g_failures);

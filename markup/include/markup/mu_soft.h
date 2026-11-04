@@ -136,8 +136,23 @@ void mu_soft_begin_frame(MuRenderContext *rc, MuColor clear);
  * The partial-repaint counterpart to mu_soft_begin_frame: pass the damage rect so
  * untouched pixels survive from the previous frame. Clearing the whole surface and then
  * repainting only the damaged part would blank everything else.
+ *
+ * For a damage *region*, use mu_soft_begin_frame_region rather than this with
+ * mu_damage_rect: the clear has to cover exactly what mu_paint_damaged paints.
  */
 void mu_soft_begin_frame_rect(MuRenderContext *rc, MuColor clear, MuRect area);
+
+/**
+ * Clear every rect of `region` and reset the clip stack, once.
+ *
+ * This exists so that clear and paint cannot drift apart. mu_paint_damaged paints the
+ * region's rects and nothing else, so clearing the bounding box instead would blank
+ * pixels nothing then repaints -- holes of flat clear colour wherever the region was not
+ * solid. Pass mu_damage_region(ctx) straight through and the two agree by construction.
+ *
+ * A NULL or empty region clears nothing and still resets the clip stack.
+ */
+void mu_soft_begin_frame_region(MuRenderContext *rc, MuColor clear, const MuRegion *region);
 
 const void *mu_soft_pixel_data(MuRenderContext *rc, int *out_w, int *out_h, int *out_row_bytes);
 

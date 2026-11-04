@@ -90,9 +90,14 @@ void mu_backdrop_cache_drop(MuRenderContext *rc, const MuNode *node);
 void mu_paint_all(MuContext *ctx, MuRenderContext *rc);
 
 /**
- * Repaint only what intersects the accumulated damage rect, pruning subtrees that
- * cannot touch it. Opt-in: call mu_damage_collect first, and clear/present the same
- * rect. Callers that do neither should keep using mu_paint_all.
+ * Repaint the tree once per damage rect, clipped to that rect, pruning subtrees that
+ * cannot touch it.
+ *
+ * Opt-in: call mu_damage_collect first, and clear exactly the same region beforehand --
+ * mu_damage_region(ctx), not mu_damage_rect, or the parts of the bounding box the region
+ * does not cover end up cleared and never repainted. Presenting may use the bounding
+ * box, since the pixels in it the region missed still hold last frame's content. Callers
+ * that want none of this should keep using mu_paint_all.
  */
 void mu_paint_damaged(MuContext *ctx, MuRenderContext *rc);
 

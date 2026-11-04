@@ -9,12 +9,12 @@
     {
       "name": "msvc-x64",
       "displayName": "MSVC x64 — Visual Studio 18 2026",
-      "description": "Needs CMake 4.2+ (lists 'Visual Studio 18 2026' in 'cmake --help'). If configure fails, use msvc-x64-vs2022 or upgrade CMake from cmake.org.",
+      "description": "Software backend + SDL3 window (demo_soft, demo_physics) and the test suite. Needs CMake 4.2+ (lists 'Visual Studio 18 2026' in 'cmake --help'). If configure fails, use msvc-x64-vs2022 or upgrade CMake from cmake.org.",
       "generator": "Visual Studio 18 2026",
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
-        "MARKUP_FETCH_RAYLIB": "ON"
+        "MARKUP_WITH_SDL": "ON"
       }
     },
     {
@@ -25,7 +25,7 @@
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build-vs2022",
       "cacheVariables": {
-        "MARKUP_FETCH_RAYLIB": "ON"
+        "MARKUP_WITH_SDL": "ON"
       }
     },
     {
@@ -39,7 +39,6 @@
         "PATH": "C:/Program Files/Git/cmd;C:/Program Files/Git/bin;$penv{PATH}"
       },
       "cacheVariables": {
-        "MARKUP_FETCH_RAYLIB": "OFF",
         "MARKUP_WITH_SKIA": "ON",
         "MARKUP_FETCH_SDL3": "ON",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake"
