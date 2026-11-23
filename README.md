@@ -165,7 +165,7 @@ That is the whole header. There is no card, tile or scroll-column factory: a tit
 **`mu_make_panel`** plus a label, which is what **`apps/demo_skia/main.c`** does, and a
 scrollable column is **`mu_make_scroll`**.
 
-**Agent skill:** [`.cursor/skills/markup-compose/SKILL.md`](.cursor/skills/markup-compose/SKILL.md) — patterns for AI agents.
+**Agent skill:** `.cursor/skills/markup-compose/SKILL.md` — compose patterns for AI agents. Deliberately **not tracked** (`.cursor/` is gitignored), so it is absent from a fresh clone; this is a note about what a working tree may contain, not a link.
 
 ### Demos
 

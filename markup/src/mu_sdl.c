@@ -2,11 +2,13 @@
 #include "../include/markup/mu_input.h"
 #include "../include/markup/mu_popup.h"
 #include "../include/markup/mu_widgets_basic.h"
+#include "mu_input_keymap.h"
 
 #include <SDL3/SDL.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+
 struct MuSdlApp {
     SDL_Window *window;
     SDL_Renderer *renderer;
@@ -22,7 +24,25 @@ struct MuSdlApp {
     float wheel_mouse_x;
     float wheel_mouse_y;
     bool wheel_pending;
+    bool btn_down[3];
+    bool btn_was[3];
 };
+
+static int sdl_button_index(Uint8 sdl_btn) {
+    if (sdl_btn == SDL_BUTTON_LEFT) return MU_BUTTON_LEFT;
+    if (sdl_btn == SDL_BUTTON_MIDDLE) return MU_BUTTON_MIDDLE;
+    if (sdl_btn == SDL_BUTTON_RIGHT) return MU_BUTTON_RIGHT;
+    return MU_BUTTON_LEFT;
+}
+
+static uint32_t sdl_modifiers(SDL_Keymod m) {
+    uint32_t out = 0;
+    if (m & SDL_KMOD_SHIFT) out |= MU_MOD_SHIFT;
+    if (m & SDL_KMOD_CTRL) out |= MU_MOD_CTRL;
+    if (m & SDL_KMOD_ALT) out |= MU_MOD_ALT;
+    if (m & SDL_KMOD_GUI) out |= MU_MOD_META;
+    return out;
+}
 
 MuSdlApp *mu_sdl_create(const char *title, int width, int height) {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) return NULL;
@@ -86,6 +106,14 @@ static void refresh_size(MuSdlApp *app) {
     app->texture = SDL_CreateTexture(app->renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
 }
 
+static void dispatch_sdl_key(MuContext *ctx, const SDL_KeyboardEvent *key, bool down) {
+    if (!ctx || !key) return;
+    int mk = mu_key_from_sdl_sym((long)key->key);
+    if (mk == MU_KEY_UNKNOWN) return;
+    MuKeyEvent ke = {mk, down, !down, key->repeat != 0, sdl_modifiers(SDL_GetModState())};
+    mu_input_dispatch_key(ctx, &ke);
+}
+
 bool mu_sdl_poll(MuSdlApp *app, MuContext *ctx) {
     if (!app) return false;
     SDL_Event ev;
@@ -97,12 +125,18 @@ bool mu_sdl_poll(MuSdlApp *app, MuContext *ctx) {
         case SDL_EVENT_WINDOW_RESIZED:
             refresh_size(app);
             break;
-        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+            int b = sdl_button_index(ev.button.button);
+            if (b >= 0 && b < 3) app->btn_down[b] = true;
             if (ev.button.button == SDL_BUTTON_LEFT) app->mouse_down = true;
             break;
-        case SDL_EVENT_MOUSE_BUTTON_UP:
+        }
+        case SDL_EVENT_MOUSE_BUTTON_UP: {
+            int b = sdl_button_index(ev.button.button);
+            if (b >= 0 && b < 3) app->btn_down[b] = false;
             if (ev.button.button == SDL_BUTTON_LEFT) app->mouse_down = false;
             break;
+        }
         case SDL_EVENT_MOUSE_MOTION:
             app->mouse_x = ev.motion.x;
             app->mouse_y = ev.motion.y;
@@ -122,20 +156,10 @@ bool mu_sdl_poll(MuSdlApp *app, MuContext *ctx) {
             }
             break;
         case SDL_EVENT_KEY_DOWN:
-            if (ctx) {
-                MuNode *focused = mu_context_find_id(ctx, NULL, ctx->focused_id);
-                if (focused && focused->role && strcmp(focused->role, "input") == 0) {
-                    MuKeyEvent ke = {MU_KEY_UNKNOWN, true, ev.key.repeat != 0};
-                    SDL_Keycode sym = ev.key.key;
-                    if (sym == SDLK_BACKSPACE) ke.key = MU_KEY_BACKSPACE;
-                    else if (sym == SDLK_DELETE) ke.key = MU_KEY_DELETE;
-                    else if (sym == SDLK_LEFT) ke.key = MU_KEY_LEFT;
-                    else if (sym == SDLK_RIGHT) ke.key = MU_KEY_RIGHT;
-                    else if (sym == SDLK_HOME) ke.key = MU_KEY_HOME;
-                    else if (sym == SDLK_END) ke.key = MU_KEY_END;
-                    if (ke.key != MU_KEY_UNKNOWN) mu_input_dispatch_key(ctx, &ke);
-                }
-            }
+            dispatch_sdl_key(ctx, &ev.key, true);
+            break;
+        case SDL_EVENT_KEY_UP:
+            dispatch_sdl_key(ctx, &ev.key, false);
             break;
         default:
             break;
@@ -166,7 +190,6 @@ void mu_sdl_present_rect(MuSdlApp *app, MuRenderContext *rc, MuRect area) {
 
     if (x1 > x0 && y1 > y0) {
         SDL_Rect r = {x0, y0, x1 - x0, y1 - y0};
-        /* SDL wants the pixels for the sub-rect, so offset into the surface. */
         const unsigned char *base = (const unsigned char *)pixels;
         const void *sub = base + (size_t)y0 * (size_t)stride + (size_t)x0 * 4u;
         SDL_UpdateTexture(app->texture, &r, sub, stride);
@@ -186,45 +209,58 @@ void mu_sdl_present(MuSdlApp *app, MuRenderContext *rc) {
 void mu_sdl_frame(MuContext *ctx, MuSdlApp *app) {
     if (!ctx || !app) return;
 
+    mu_input_set_modifiers(ctx, sdl_modifiers(SDL_GetModState()));
+
     MuVec2 mp = {app->mouse_x, app->mouse_y};
     mu_input_update_hover(ctx, mp);
 
-    static bool prev_down = false;
-    MuPointerEvent pe = {0};
-    pe.position = mp;
-    pe.button = 0;
+    for (int b = 0; b < 3; b++) {
+        if (app->btn_down[b] == app->btn_was[b]) continue;
+        MuPointerEvent pe = {0};
+        pe.position = mp;
+        pe.button = b;
+        pe.modifiers = ctx->seat_modifiers;
+        if (app->btn_down[b]) {
+            pe.pressed = true;
+            mu_popups_dispatch_pointer(ctx, &pe);
+            mu_input_dispatch_pointer(ctx, &pe);
+        } else {
+            pe.released = true;
+            mu_popups_dispatch_pointer(ctx, &pe);
+            mu_input_dispatch_pointer(ctx, &pe);
+        }
+        app->btn_was[b] = app->btn_down[b];
+    }
 
-    if (app->mouse_down && !prev_down) {
-        pe.pressed = true;
-        mu_popups_dispatch_pointer(ctx, &pe);
-        mu_input_dispatch_pointer(ctx, &pe);
-    } else if (!app->mouse_down && prev_down) {
-        pe.released = true;
-        mu_popups_dispatch_pointer(ctx, &pe);
-        mu_input_dispatch_pointer(ctx, &pe);
-    } else if (app->mouse_down && ctx->captured_pointer_id) {
+    if (app->mouse_down && ctx->captured_pointer_id) {
+        MuPointerEvent pe = {0};
+        pe.position = mp;
+        pe.button = MU_BUTTON_LEFT;
         pe.drag = true;
+        pe.modifiers = ctx->seat_modifiers;
         mu_input_dispatch_pointer(ctx, &pe);
     }
-    prev_down = app->mouse_down;
 
     MuNode *focused = mu_context_find_id(ctx, NULL, ctx->focused_id);
     bool want_text = focused && focused->role && strcmp(focused->role, "input") == 0;
-    if (want_text != app->text_input_active) {
-        if (want_text) {
+
+    MuRect ime_area = {0};
+    bool have_ime_area = mu_input_get_ime_caret_rect(ctx, &ime_area);
+    if (!have_ime_area && want_text && focused) {
+        ime_area = focused->bounds;
+        have_ime_area = ime_area.w > 0.f && ime_area.h > 0.f;
+    }
+
+    if (have_ime_area != app->text_input_active) {
+        if (have_ime_area) {
             SDL_StartTextInput(app->window);
-            SDL_Rect area = {(int)focused->bounds.x, (int)focused->bounds.y, (int)focused->bounds.w,
-                             (int)focused->bounds.h};
-            if (area.w < 1) area.w = 1;
-            if (area.h < 1) area.h = 1;
-            SDL_SetTextInputArea(app->window, &area, 0);
         } else {
             SDL_StopTextInput(app->window);
         }
-        app->text_input_active = want_text;
-    } else if (want_text && focused) {
-        SDL_Rect area = {(int)focused->bounds.x, (int)focused->bounds.y, (int)focused->bounds.w,
-                         (int)focused->bounds.h};
+        app->text_input_active = have_ime_area;
+    }
+    if (app->text_input_active) {
+        SDL_Rect area = {(int)ime_area.x, (int)ime_area.y, (int)ime_area.w, (int)ime_area.h};
         if (area.w < 1) area.w = 1;
         if (area.h < 1) area.h = 1;
         SDL_SetTextInputArea(app->window, &area, 0);
@@ -241,7 +277,8 @@ void mu_sdl_frame(MuContext *ctx, MuSdlApp *app) {
 
     if (app->wheel_x != 0.f || app->wheel_y != 0.f) {
         MuVec2 wheel_pt = app->wheel_pending ? (MuVec2){app->wheel_mouse_x, app->wheel_mouse_y} : mp;
-        mu_widgets_dispatch_wheel(ctx, wheel_pt, app->wheel_x, app->wheel_y);
+        MuWheelEvent we = {wheel_pt, app->wheel_x, app->wheel_y, ctx->seat_modifiers};
+        mu_input_dispatch_wheel(ctx, &we);
     }
     app->wheel_x = 0.f;
     app->wheel_y = 0.f;

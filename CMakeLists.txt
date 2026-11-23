@@ -79,7 +79,7 @@ if(MSVC)
     target_link_libraries(markup_style PUBLIC legacy_stdio_definitions)
 endif()
 
-add_library(markup_input STATIC markup/src/mu_input.c)
+add_library(markup_input STATIC markup/src/mu_input.c markup/src/mu_input_keymap.c)
 target_link_libraries(markup_input PUBLIC markup_core)
 
 add_library(markup_paint STATIC markup/src/mu_paint.c markup/src/mu_image_util.c markup/src/mu_image_decode.c markup/src/mu_path.c markup/src/mu_path_raster.c)

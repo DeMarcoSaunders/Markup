@@ -23,6 +23,8 @@ void mu_popup_bind_layer(MuContext *ctx, MuNode *layer);
 MuNode *mu_make_popup(MuContext *ctx);
 MuNode *mu_popup_content(MuNode *popup);
 void mu_popup_set_anchor(MuNode *popup, MuNode *anchor);
+/** Anchor in page/surface coordinates (e.g. web selection rect), not a Markup node. */
+void mu_popup_set_anchor_rect(MuNode *popup, MuRect rect);
 void mu_popup_set_placement(MuNode *popup, MuPopupPlacement placement);
 bool mu_popup_is_open(const MuNode *popup);
 

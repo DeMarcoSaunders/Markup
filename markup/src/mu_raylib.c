@@ -4,7 +4,7 @@
 #include "../include/markup/mu_popup.h"
 #include "../include/markup/mu_widgets_basic.h"
 #include "mu_path_raster.h"
-#include "../include/markup/mu_path.h"
+#include "mu_input_keymap.h"
 #include "../include/markup/mu_text.h"
 #include <math.h>
 #include <stdio.h>
@@ -346,75 +346,88 @@ void mu_draw_text(MuRenderContext *rc, const char *text, float x, float y, const
     raylib_draw_text_ex(f, text, (Vector2){x, y}, size, spacing, mu_to_ray(fg), weight, italic);
 }
 
-static void raylib_dispatch_input(MuContext *ctx) {
-    MuVec2 mp = {GetMousePosition().x, GetMousePosition().y};
-    mu_input_update_hover(ctx, mp);
+static uint32_t raylib_modifiers(void) {
+    uint32_t m = 0;
+    if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) m |= MU_MOD_SHIFT;
+    if (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) m |= MU_MOD_CTRL;
+    if (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT)) m |= MU_MOD_ALT;
+    if (IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER)) m |= MU_MOD_META;
+    return m;
+}
 
+static void raylib_emit_key(MuContext *ctx, int rk, bool down) {
+    int mk = mu_key_from_raylib_key(rk);
+    if (mk == MU_KEY_UNKNOWN) return;
+    MuKeyEvent ke = {mk, down, !down, false, ctx->seat_modifiers};
+    mu_input_dispatch_key(ctx, &ke);
+}
+
+static void raylib_pointer_btn(MuContext *ctx, MuVec2 mp, int btn, bool down) {
     MuPointerEvent ev = {0};
     ev.position = mp;
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-        ev.button = 0;
+    ev.button = btn;
+    ev.modifiers = ctx->seat_modifiers;
+    if (down)
         ev.pressed = true;
-        mu_popups_dispatch_pointer(ctx, &ev);
-        mu_input_dispatch_pointer(ctx, &ev);
-    } else if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
-        ev.button = 0;
+    else
         ev.released = true;
-        mu_popups_dispatch_pointer(ctx, &ev);
-        mu_input_dispatch_pointer(ctx, &ev);
-    }
+    mu_popups_dispatch_pointer(ctx, &ev);
+    mu_input_dispatch_pointer(ctx, &ev);
+}
 
-    if (IsKeyPressed(KEY_TAB)) {
-        mu_focus_advance_tab(ctx);
+static void raylib_dispatch_input(MuContext *ctx) {
+    MuVec2 mp = {GetMousePosition().x, GetMousePosition().y};
+    mu_input_set_modifiers(ctx, raylib_modifiers());
+    mu_input_update_hover(ctx, mp);
+
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) raylib_pointer_btn(ctx, mp, MU_BUTTON_LEFT, true);
+    if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) raylib_pointer_btn(ctx, mp, MU_BUTTON_LEFT, false);
+    if (IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE)) raylib_pointer_btn(ctx, mp, MU_BUTTON_MIDDLE, true);
+    if (IsMouseButtonReleased(MOUSE_BUTTON_MIDDLE)) raylib_pointer_btn(ctx, mp, MU_BUTTON_MIDDLE, false);
+    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) raylib_pointer_btn(ctx, mp, MU_BUTTON_RIGHT, true);
+    if (IsMouseButtonReleased(MOUSE_BUTTON_RIGHT)) raylib_pointer_btn(ctx, mp, MU_BUTTON_RIGHT, false);
+
+    if (IsKeyPressed(KEY_TAB)) mu_focus_advance_tab(ctx);
+
+    for (int k = KEY_SPACE; k <= KEY_KB_MENU; k++) {
+        if (IsKeyPressed(k)) raylib_emit_key(ctx, k, true);
+        if (IsKeyReleased(k)) raylib_emit_key(ctx, k, false);
     }
 
     MuNode *focused = mu_context_find_id(ctx, NULL, ctx->focused_id);
-    bool text_focus = focused && focused->role && strcmp(focused->role, "input") == 0;
-    if (text_focus) {
-        if (IsKeyPressed(KEY_BACKSPACE)) {
-            MuKeyEvent ke = {MU_KEY_BACKSPACE, true, false};
-            mu_input_dispatch_key(ctx, &ke);
-        }
-        if (IsKeyPressed(KEY_DELETE)) {
-            MuKeyEvent ke = {MU_KEY_DELETE, true, false};
-            mu_input_dispatch_key(ctx, &ke);
-        }
-        if (IsKeyPressed(KEY_LEFT)) {
-            MuKeyEvent ke = {MU_KEY_LEFT, true, false};
-            mu_input_dispatch_key(ctx, &ke);
-        }
-        if (IsKeyPressed(KEY_RIGHT)) {
-            MuKeyEvent ke = {MU_KEY_RIGHT, true, false};
-            mu_input_dispatch_key(ctx, &ke);
-        }
-        if (IsKeyPressed(KEY_HOME)) {
-            MuKeyEvent ke = {MU_KEY_HOME, true, false};
-            mu_input_dispatch_key(ctx, &ke);
-        }
-        if (IsKeyPressed(KEY_END)) {
-            MuKeyEvent ke = {MU_KEY_END, true, false};
-            mu_input_dispatch_key(ctx, &ke);
-        }
-    }
-
     if (focused) {
         int ch;
-        while ((ch = GetCharPressed()) > 0)
-            mu_input_dispatch_char(ctx, (unsigned int)ch);
+        while ((ch = GetCharPressed()) > 0) mu_input_dispatch_char(ctx, (unsigned int)ch);
     }
 
     if (ctx->captured_pointer_id && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
         MuPointerEvent ev2 = {0};
         ev2.position = mp;
+        ev2.button = MU_BUTTON_LEFT;
         ev2.drag = true;
+        ev2.modifiers = ctx->seat_modifiers;
         mu_input_dispatch_pointer(ctx, &ev2);
     }
 
     float wheel = GetMouseWheelMove();
-    if (wheel != 0.f) mu_widgets_dispatch_wheel(ctx, mp, 0.f, wheel);
+    if (wheel != 0.f) {
+        MuWheelEvent we = {mp, 0.f, wheel, ctx->seat_modifiers};
+        mu_input_dispatch_wheel(ctx, &we);
+    }
 }
 
 void mu_raylib_frame(MuContext *ctx, MuRenderContext *rc) {
     (void)rc;
     raylib_dispatch_input(ctx);
+}
+
+void mu_draw_image_rgba_buffer(MuRenderContext *rc, const uint32_t *pixels, int w, int h, int stride, MuRect dst,
+                               const MuDrawImageOpts *opts) {
+    (void)rc;
+    (void)pixels;
+    (void)w;
+    (void)h;
+    (void)stride;
+    (void)dst;
+    (void)opts;
 }

@@ -564,3 +564,14 @@ extern "C" void mu_draw_text(MuRenderContext *rc, const char *text, float x, flo
     paint.setColor(mu_to_sk(fg));
     canvas->drawString(text, x, y + font.getSize() * 0.85f, font, paint);
 }
+
+extern "C" void mu_draw_image_rgba_buffer(MuRenderContext *rc, const uint32_t *pixels, int w, int h, int stride,
+                                            MuRect dst, const MuDrawImageOpts *opts) {
+    (void)rc;
+    (void)pixels;
+    (void)w;
+    (void)h;
+    (void)stride;
+    (void)dst;
+    (void)opts;
+}

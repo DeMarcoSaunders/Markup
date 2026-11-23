@@ -530,6 +530,7 @@ uint32_t mu_soft_image_from_rgba(MuRenderContext *rc, const uint8_t *rgba, int w
     rc->images[id].pixels = argb;
     rc->images[id].width = width;
     rc->images[id].height = height;
+    rc->images[id].row_stride = width;
     return (uint32_t)id;
 }
 
@@ -552,6 +553,11 @@ static MuSoftImageSlot *soft_resolve_image(MuRenderContext *rc, uint32_t image_i
 typedef struct MuSampleBounds {
     int min_x, min_y, max_x, max_y;
 } MuSampleBounds;
+
+static int soft_image_row_stride(const MuSoftImageSlot *img) {
+    if (!img) return 0;
+    return img->row_stride > 0 ? img->row_stride : img->width;
+}
 
 /**
  * Bilinear sample at integer texel (x0,y0) with 8-bit sub-texel offsets (tx,ty).
@@ -585,8 +591,9 @@ static void sample_bilinear_premul(const MuSoftImageSlot *img, const MuSampleBou
     if (y0 < b->min_y) y0 = b->min_y; else if (y0 > b->max_y) y0 = b->max_y;
     if (y1 < b->min_y) y1 = b->min_y; else if (y1 > b->max_y) y1 = b->max_y;
 
-    const uint32_t *row0 = img->pixels + (size_t)y0 * (size_t)img->width;
-    const uint32_t *row1 = img->pixels + (size_t)y1 * (size_t)img->width;
+    int rs = soft_image_row_stride(img);
+    const uint32_t *row0 = img->pixels + (size_t)y0 * (size_t)rs;
+    const uint32_t *row1 = img->pixels + (size_t)y1 * (size_t)rs;
     uint32_t p00 = row0[x0], p10 = row0[x1], p01 = row1[x0], p11 = row1[x1];
 
     uint32_t ix = 256u - tx, iy = 256u - ty;
@@ -703,6 +710,76 @@ void mu_draw_image(MuRenderContext *rc, uint32_t image_id, MuRect dst, const MuD
 
             row[x] = ((a + mu_soft_mul255(da, inv)) << 24) | ((r + mu_soft_mul255(dr, inv)) << 16) |
                      ((g + mu_soft_mul255(dg, inv)) << 8) | (b + mu_soft_mul255(db, inv));
+        }
+    }
+}
+
+void mu_draw_image_rgba_buffer(MuRenderContext *rc, const uint32_t *pixels, int w, int h, int stride, MuRect dst,
+                               const MuDrawImageOpts *opts) {
+    if (!rc || !rc->pixels || !pixels || w < 1 || h < 1 || dst.w < 1.f || dst.h < 1.f) return;
+    if (stride < w * 4) stride = w * 4;
+
+    MuSoftImageSlot slot;
+    slot.width = w;
+    slot.height = h;
+    slot.pixels = (uint32_t *)pixels;
+    slot.row_stride = stride / 4;
+    if (slot.row_stride < w) slot.row_stride = w;
+
+    dst = mu_soft_scaled_rect(rc, dst);
+    MuDrawImageOpts defaults;
+    if (!opts) {
+        mu_draw_image_opts_init(&defaults);
+        opts = &defaults;
+    }
+
+    MuRect src_px = {0.f, 0.f, (float)w, (float)h};
+    if (!mu_image_resolve_src(&opts->src, (float)w, (float)h, &src_px)) return;
+    MuRect draw = mu_image_fit_dst(src_px.w, src_px.h, dst, opts->fit);
+    if (draw.w < 1.f || draw.h < 1.f) return;
+
+    MuSoftClip clip = mu_soft_clip_now(rc);
+    int x0 = (int)floorf(draw.x), x1 = (int)ceilf(draw.x + draw.w);
+    int y0 = (int)floorf(draw.y), y1 = (int)ceilf(draw.y + draw.h);
+    if (x0 < clip.x0) x0 = clip.x0;
+    if (y0 < clip.y0) y0 = clip.y0;
+    if (x1 > clip.x1) x1 = clip.x1;
+    if (y1 > clip.y1) y1 = clip.y1;
+    if (x1 <= x0 || y1 <= y0) return;
+
+    const MuColor tint = opts->tint;
+    const float u_scale = src_px.w / draw.w;
+    const float v_scale = src_px.h / draw.h;
+
+    MuSampleBounds sb;
+    sb.min_x = (int)src_px.x;
+    sb.min_y = (int)src_px.y;
+    sb.max_x = (int)(src_px.x + src_px.w) - 1;
+    sb.max_y = (int)(src_px.y + src_px.h) - 1;
+    if (sb.min_x < 0) sb.min_x = 0;
+    if (sb.min_y < 0) sb.min_y = 0;
+    if (sb.max_x > w - 1) sb.max_x = w - 1;
+    if (sb.max_y > h - 1) sb.max_y = h - 1;
+
+    for (int y = y0; y < y1; y++) {
+        float v = src_px.y + ((float)y + 0.5f - draw.y) * v_scale;
+        uint32_t *drow = rc->pixels + (size_t)y * (size_t)rc->stride;
+        for (int x = x0; x < x1; x++) {
+            float u = src_px.x + ((float)x + 0.5f - draw.x) * u_scale;
+            uint32_t s[4];
+            sample_bilinear_premul(&slot, &sb, u, v, s);
+            uint32_t a = s[3];
+            if (a == 0u) continue;
+            uint32_t r = s[2], g = s[1], b = s[0];
+            if (!(tint.r == 255 && tint.g == 255 && tint.b == 255 && tint.a == 255)) {
+                uint32_t ta = tint.a;
+                r = mu_soft_mul255(mu_soft_mul255(r, tint.r), ta);
+                g = mu_soft_mul255(mu_soft_mul255(g, tint.g), ta);
+                b = mu_soft_mul255(mu_soft_mul255(b, tint.b), ta);
+                a = mu_soft_mul255(a, ta);
+            }
+            uint32_t d = drow[x];
+            drow[x] = mu_soft_blend_over(d, (MuColor){(unsigned char)r, (unsigned char)g, (unsigned char)b, (unsigned char)a}, a);
         }
     }
 }

@@ -94,6 +94,29 @@ markup/src/mu_evdev.c              Phase 6: input source
 tests/test_raster.c                pixel-level assertions
 ```
 
+As built, with the Phase 6 files still absent:
+
+```
+markup/include/markup/mu_soft.h    MuRenderContext def, soft API, mu_soft_pack/unpack
+markup/src/mu_soft_internal.h      shared clip + blend primitives, static inline
+markup/src/mu_soft.c               contract fns *and* the pixel ops
+markup/src/mu_soft_text.c          stb_truetype glyph cache + atlas
+markup/src/mu_soft_blur.c          backdrop blur + its cache (post-dates this plan)
+markup/src/mu_soft_path.c          soft's span sink for the shared path rasterizer
+markup/vendor/stb_truetype.h       vendored, public domain
+tests/test_raster.c                pixel-level assertions
+```
+
+(`markup_soft` is those four `.c` files. Path *rasterization* is backend-neutral and lives
+in `markup_paint` as `mu_path_raster.c`; `mu_soft_path.c` is only the span callback that
+writes its output into the surface.)
+
+No `mu_soft_raster.c`: the span and SDF code stayed in `mu_soft.c` next to its only
+callers, and the primitives that are genuinely shared are `static inline` instead —
+`mu_soft_pack` / `mu_soft_unpack` in the public header, `mu_soft_mul255` /
+`mu_soft_blend_over` and the clip accessors in `mu_soft_internal.h`, where the compiler
+can fold them into inner loops without a cross-TU call.
+
 ### Pixel format
 
 Store as `uint32_t` in `0xAARRGGBB` (little-endian byte order B,G,R,A). This matches
@@ -103,6 +126,10 @@ conversion**. Pack from `MuColor`:
 ```c
 #define MU_SOFT_PACK(c) (((uint32_t)(c).a<<24)|((uint32_t)(c).r<<16)|((uint32_t)(c).g<<8)|(uint32_t)(c).b)
 ```
+
+Shipped as `static inline uint32_t mu_soft_pack(MuColor)` in `mu_soft.h` rather than a
+macro — same code generated, but it type-checks its argument and does not evaluate it
+four times.
 
 ### Surface
 

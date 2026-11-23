@@ -149,6 +149,7 @@ struct MuNode {
      * on every mutation site remembering to mark. */
     MuRect prev_bounds;
     uint32_t prev_flags;
+    uint8_t cursor; /* MuCursor */
 };
 
 #define MU_NODE_VISIBLE (1u << 0)
@@ -249,6 +250,10 @@ struct MuContext {
     MuStyleModule *style;
     /* Owned by markup_widgets_basic: calloc'd in mu_widgets_basic_register, freed here */
     void *widgets_basic_kinds;
+
+    uint32_t seat_modifiers;
+    uint8_t seat_cursor;
+    void *input_seat; /* MuInputSeat; owned by mu_input */
 };
 
 void mu_context_init(MuContext *ctx, size_t arena_capacity);

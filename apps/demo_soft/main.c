@@ -469,6 +469,7 @@ int main(int argc, char **argv) {
             mu_soft_begin_frame_region(&rc, clear, mu_damage_region(&ctx));
             mu_paint_damaged(&ctx, &rc);
             mu_sdl_present_rect(app, &rc, mu_damage_rect(&ctx));
+            mu_frame_presented(&ctx);
         }
         mu_damage_reset(&ctx);
 

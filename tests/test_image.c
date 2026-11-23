@@ -29,6 +29,14 @@ static const char *g_case = "";
 static const MuColor BLACK = {0, 0, 0, 255};
 static const MuColor WHITE = {255, 255, 255, 255};
 
+static uint32_t premul_rgba_pixel(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    uint32_t aa = a;
+    uint32_t rr = ((uint32_t)r * aa + 127u) / 255u;
+    uint32_t gg = ((uint32_t)g * aa + 127u) / 255u;
+    uint32_t bb = ((uint32_t)b * aa + 127u) / 255u;
+    return (aa << 24) | (rr << 16) | (gg << 8) | bb;
+}
+
 static int near_i(int a, int b, int tol) {
     int d = a - b;
     return (d < 0 ? -d : d) <= tol;
@@ -281,6 +289,43 @@ static void test_respects_clip(void) {
     mu_soft_render_shutdown(&rc);
 }
 
+/** Padded row stride must not sample bytes in the gutter between logical width and stride. */
+static void test_live_buffer_padded_stride(void) {
+    CASE("live buffer padded stride");
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, 40, 40);
+
+    const int w = 2, h = 2;
+    const int row_words = 4;
+    const int stride_bytes = row_words * (int)sizeof(uint32_t);
+    uint32_t *buf = (uint32_t *)calloc((size_t)h * (size_t)row_words, sizeof(uint32_t));
+    CHECK(buf != NULL);
+
+    const uint32_t poison = premul_rgba_pixel(255, 0, 255, 255);
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < row_words; x++) buf[y * row_words + x] = poison;
+    }
+    buf[0] = premul_rgba_pixel(255, 0, 0, 255);
+    buf[1] = premul_rgba_pixel(0, 255, 0, 255);
+    buf[row_words] = premul_rgba_pixel(0, 0, 255, 255);
+    buf[row_words + 1] = premul_rgba_pixel(255, 255, 255, 255);
+
+    mu_soft_begin_frame(&rc, BLACK);
+
+    MuDrawImageOpts o;
+    mu_draw_image_opts_init(&o);
+    o.fit = MU_IMAGE_FIT_FILL;
+    mu_draw_image_rgba_buffer(&rc, buf, w, h, stride_bytes, (MuRect){0.f, 0.f, 40.f, 40.f}, &o);
+
+    check_px(&rc, 3, 3, (MuColor){255, 0, 0, 255}, 8);
+    check_px(&rc, 36, 3, (MuColor){0, 255, 0, 255}, 8);
+    check_px(&rc, 3, 36, (MuColor){0, 0, 255, 255}, 8);
+    check_px(&rc, 36, 36, WHITE, 8);
+
+    free(buf);
+    mu_soft_render_shutdown(&rc);
+}
+
 static void test_invalid_inputs_are_safe(void) {
     CASE("invalid inputs are safe");
     MuRenderContext rc;
@@ -355,6 +400,7 @@ int main(int argc, char **argv) {
     test_src_rect_does_not_bleed();
     test_radius_rounds_corners();
     test_respects_clip();
+    test_live_buffer_padded_stride();
     test_invalid_inputs_are_safe();
     test_decode_failures_are_explained();
     if (argc > 1) test_decodes_real_png(argv[1]);

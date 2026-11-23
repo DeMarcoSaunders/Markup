@@ -39,12 +39,15 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
-      - name: Configure (optional modules)
-        run: cmake -S . -B build_full -DCMAKE_BUILD_TYPE=Release -DMARKUP_WITH_STYLE_FILE=ON -DMARKUP_WITH_EXTRA_WIDGETS=ON
-
-      # Build only: the stub libraries add no tests, and the suite above already ran.
-      - name: Build full preset
-        run: cmake --build build_full --config Release
+      # There was a "Configure (optional modules)" / "Build full preset" pair here,
+      # passing -DMARKUP_WITH_STYLE_FILE=ON -DMARKUP_WITH_EXTRA_WIDGETS=ON. Those options,
+      # and the two stub sources behind them, no longer exist anywhere in the project:
+      # CMake answered with "Manually-specified variables were not used by the project"
+      # and configured a tree identical to `build` above, so the pair was a second full
+      # build of the default configuration for no coverage. Removed rather than repointed
+      # -- the remaining configurations that differ are SDL3 (fetched, needs X11 dev
+      # packages on the runner) and Skia (vcpkg, 30+ min), neither of which is worth a
+      # per-push build for a windowing harness no test exercises.
 
       # The deprecated raylib backend. Kept in CI only so it does not rot into a
       # non-compiling state again while it is still shipped; drop this job with it.

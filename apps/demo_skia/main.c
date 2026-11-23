@@ -10,6 +10,7 @@
 #include "markup/mu_compose.h"
 #include "markup/mu_popup.h"
 #include "markup/mu_image.h"
+#include "markup/mu_input.h"
 #include "markup/mu_widgets_basic.h"
 #include <stdio.h>
 #include <string.h>
@@ -587,6 +588,7 @@ int main(void) {
         mu_paint_all(&ctx, &rc);
         mu_skia_end_frame(&rc);
         mu_sdl_present(app, &rc);
+        mu_frame_presented(&ctx);
 
         mu_frame_end(&ctx);
     }

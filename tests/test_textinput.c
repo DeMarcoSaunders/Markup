@@ -89,7 +89,7 @@ static void fixture_free(Fixture *f) {
 }
 
 static void press(Fixture *f, int key) {
-    MuKeyEvent ev = {key, true, false};
+    MuKeyEvent ev = {key, true, false, false, 0};
     mu_input_dispatch_key(&f->ctx, &ev);
 }
 
@@ -223,6 +223,46 @@ static void test_middle_edit_preserves_neighbours(void) {
     fixture_free(&f);
 }
 
+static void test_page_ime_caret_published(void) {
+    CASE("page ime caret");
+    Fixture f;
+    fixture_init(&f, "");
+    mu_focus_set(&f.ctx, 0);
+    MuRect page = {12.f, 34.f, 2.f, 18.f};
+    mu_input_set_ime_caret_rect(&f.ctx, page);
+    MuRect got = {0};
+    CHECK(mu_input_get_ime_caret_rect(&f.ctx, &got));
+    CHECK(got.x == 12.f && got.y == 34.f && got.w == 2.f && got.h == 18.f);
+    mu_frame_begin(&f.ctx);
+    CHECK(!mu_input_get_ime_caret_rect(&f.ctx, &got));
+    fixture_free(&f);
+}
+
+static void test_page_ime_caret_overrides_widget(void) {
+    CASE("page ime caret overrides widget");
+    Fixture f;
+    fixture_init(&f, "hi");
+    mu_focus_set(&f.ctx, f.input->id);
+    MuRect page = {90.f, 10.f, 3.f, 20.f};
+    mu_input_set_ime_caret_rect(&f.ctx, page);
+    MuRect got = {0};
+    CHECK(mu_input_get_ime_caret_rect(&f.ctx, &got));
+    CHECK(got.x == 90.f && got.w == 3.f);
+    fixture_free(&f);
+}
+
+static void test_widget_ime_caret_when_no_page(void) {
+    CASE("widget ime caret");
+    Fixture f;
+    fixture_init(&f, "ab");
+    mu_focus_set(&f.ctx, f.input->id);
+    MuRect got = {0};
+    CHECK(mu_input_get_ime_caret_rect(&f.ctx, &got));
+    CHECK(got.w == 2.f);
+    CHECK(got.x > f.input->bounds.x);
+    fixture_free(&f);
+}
+
 int main(void) {
     test_backspace_two_byte();
     test_backspace_three_byte();
@@ -234,6 +274,9 @@ int main(void) {
     test_char_path_encodes_non_ascii();
     test_control_and_invalid_codepoints_rejected();
     test_middle_edit_preserves_neighbours();
+    test_page_ime_caret_published();
+    test_page_ime_caret_overrides_widget();
+    test_widget_ime_caret_when_no_page();
 
     if (g_failures) {
         printf("\n%d check(s) failed\n", g_failures);

@@ -69,6 +69,8 @@ void mu_image_set_tint(MuNode *image, MuColor tint);
 void mu_image_set_radius(MuNode *image, float radius);
 /** Atlas slice in texture pixels; pass w/h <= 0 to use the full image. */
 void mu_image_set_src_rect(MuNode *image, MuRect src);
+/** Borrow live pixels for this frame (not copied). Clears when mu_image_set_id is called. */
+void mu_image_bind_pixels(MuNode *image, const uint32_t *pixels, int w, int h, int stride_bytes);
 
 MuNode *mu_make_scroll(MuContext *ctx, MuScrollAxis axis);
 MuNode *mu_scroll_content(MuNode *scroll);

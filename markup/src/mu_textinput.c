@@ -430,3 +430,46 @@ MuNode *mu_make_textinput(MuContext *ctx, const char *initial) {
     n->layout.flex_shrink = 0.f;
     return n;
 }
+
+void mu_textinput_get_caret_rect(const MuNode *input, MuRect *out) {
+    if (out) *out = (MuRect){0.f, 0.f, 0.f, 0.f};
+    if (!input || !out) return;
+    const MuTextInState *s = (const MuTextInState *)input->state;
+    if (!s) return;
+
+    char prefix[MU_TEXTINPUT_CAP];
+    if (s->cursor > 0) {
+        memcpy(prefix, s->buf, (size_t)s->cursor);
+        prefix[s->cursor] = '\0';
+    } else {
+        prefix[0] = '\0';
+    }
+
+    MuTextMetrics cm = {0.f, 0.f};
+    mu_text_measure(NULL, prefix, &input->text, &cm);
+
+    float pad = MU_TEXTINPUT_PAD_X;
+    float tx = input->bounds.x + pad - s->scroll_x;
+    float ty = input->bounds.y + (input->bounds.h - 16.f) * 0.5f;
+    if (s->len > 0) {
+        MuTextMetrics tm = {0.f, 0.f};
+        mu_text_measure(NULL, s->buf, &input->text, &tm);
+        ty = input->bounds.y + (input->bounds.h - tm.height) * 0.5f;
+    } else {
+        const char *ph = s->placeholder[0] ? s->placeholder : "Type here…";
+        MuTextMetrics tm = {0.f, 0.f};
+        mu_text_measure(NULL, ph, &input->text, &tm);
+        ty = input->bounds.y + (input->bounds.h - tm.height) * 0.5f;
+    }
+    float line_h = cm.height > 0.f ? cm.height : 16.f;
+    *out = (MuRect){tx + cm.width, ty, 2.f, line_h};
+}
+
+bool mu_markup_ime_caret_from_widget(MuContext *ctx, MuRect *out, void *user) {
+    (void)user;
+    if (!ctx || !out) return false;
+    MuNode *focused = mu_context_find_id(ctx, NULL, ctx->focused_id);
+    if (!focused || !focused->role || strcmp(focused->role, "input") != 0) return false;
+    mu_textinput_get_caret_rect(focused, out);
+    return out->w > 0.f && out->h > 0.f;
+}

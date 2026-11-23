@@ -53,6 +53,10 @@ bool mu_image_get_size(MuRenderContext *rc, uint32_t image_id, float *out_w, flo
 
 void mu_draw_image(MuRenderContext *rc, uint32_t image_id, MuRect dst, const MuDrawImageOpts *opts);
 
+/** Draw from a caller-owned ARGB8888 buffer (0xAARRGGBB, stride in bytes). Soft backend only. */
+void mu_draw_image_rgba_buffer(MuRenderContext *rc, const uint32_t *pixels, int w, int h, int stride, MuRect dst,
+                               const MuDrawImageOpts *opts);
+
 /** Compute destination rect for fit mode (shared by backends). */
 MuRect mu_image_fit_dst(float src_w, float src_h, MuRect bounds, MuImageFit fit);
 

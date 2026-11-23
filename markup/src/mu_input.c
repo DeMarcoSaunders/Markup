@@ -2,6 +2,64 @@
 #include <stdlib.h>
 #include <string.h>
 
+extern void mu_widgets_dispatch_wheel(MuContext *ctx, MuVec2 position, float delta_x, float delta_y);
+
+typedef struct MuInputSeat {
+    MuSeatWheelFn wheel;
+    void *wheel_user;
+    MuSeatKeyFn key;
+    void *key_user;
+    MuSeatTouchFn touch;
+    void *touch_user;
+    MuPresentedFn on_presented;
+    void *on_presented_user;
+    MuClipboardBridge clipboard;
+    MuImeCallbacks ime;
+    MuRect page_ime_caret;
+    bool page_ime_caret_valid;
+    MuMarkupImeCaretFn markup_caret;
+    void *markup_caret_user;
+    char clipboard_buf[4096];
+} MuInputSeat;
+
+static MuInputSeat *seat_of(MuContext *ctx) {
+    return ctx ? (MuInputSeat *)ctx->input_seat : NULL;
+}
+
+void mu_input_context_init(MuContext *ctx) {
+    if (!ctx || ctx->input_seat) return;
+    MuInputSeat *s = (MuInputSeat *)calloc(1, sizeof(MuInputSeat));
+    ctx->input_seat = s;
+}
+
+void mu_input_context_shutdown(MuContext *ctx) {
+    if (!ctx) return;
+    free(ctx->input_seat);
+    ctx->input_seat = NULL;
+}
+
+static uint32_t key_modifiers(const MuKeyEvent *ev, MuContext *ctx) {
+    if (ev && ev->modifiers) return ev->modifiers;
+    return ctx ? ctx->seat_modifiers : 0;
+}
+
+static MuCursor cursor_for_node(const MuNode *n) {
+    if (!n) return MU_CURSOR_DEFAULT;
+    if (n->cursor != MU_CURSOR_DEFAULT) return (MuCursor)n->cursor;
+    if (n->role && strcmp(n->role, "input") == 0) return MU_CURSOR_TEXT;
+    if (n->role && (strcmp(n->role, "button") == 0 || strcmp(n->role, "tab") == 0)) return MU_CURSOR_POINTER;
+    return MU_CURSOR_DEFAULT;
+}
+
+static MuCursor cursor_at(const MuContext *ctx, uint32_t hovered_id) {
+    if (!ctx || !hovered_id) return MU_CURSOR_DEFAULT;
+    for (MuNode *n = mu_context_find_id((MuContext *)ctx, NULL, hovered_id); n; n = n->parent) {
+        MuCursor c = cursor_for_node(n);
+        if (c != MU_CURSOR_DEFAULT) return c;
+    }
+    return MU_CURSOR_DEFAULT;
+}
+
 void mu_modal_push(MuContext *ctx, uint32_t modal_root_id) {
     if (!ctx) return;
     if (ctx->modal_count >= ctx->modal_cap) {
@@ -82,12 +140,120 @@ MuNode *mu_input_node_at(MuContext *ctx, MuVec2 position) {
     return hit_tree(ctx, position);
 }
 
+void mu_input_set_modifiers(MuContext *ctx, uint32_t mods) {
+    if (ctx) ctx->seat_modifiers = mods;
+}
+
+uint32_t mu_input_modifiers(const MuContext *ctx) {
+    return ctx ? ctx->seat_modifiers : 0;
+}
+
+MuCursor mu_input_cursor(const MuContext *ctx) {
+    if (!ctx) return MU_CURSOR_DEFAULT;
+    return (MuCursor)ctx->seat_cursor;
+}
+
+void mu_node_set_cursor(MuNode *node, MuCursor cursor) {
+    if (!node) return;
+    node->cursor = (uint8_t)cursor;
+}
+
+void mu_input_set_wheel_handler(MuContext *ctx, MuSeatWheelFn fn, void *user) {
+    MuInputSeat *s = seat_of(ctx);
+    if (!s) return;
+    s->wheel = fn;
+    s->wheel_user = user;
+}
+
+void mu_input_set_key_handler(MuContext *ctx, MuSeatKeyFn fn, void *user) {
+    MuInputSeat *s = seat_of(ctx);
+    if (!s) return;
+    s->key = fn;
+    s->key_user = user;
+}
+
+void mu_input_set_touch_handler(MuContext *ctx, MuSeatTouchFn fn, void *user) {
+    MuInputSeat *s = seat_of(ctx);
+    if (!s) return;
+    s->touch = fn;
+    s->touch_user = user;
+}
+
+void mu_input_set_clipboard(MuContext *ctx, const MuClipboardBridge *bridge) {
+    MuInputSeat *s = seat_of(ctx);
+    if (!ctx || !s) return;
+    if (bridge)
+        s->clipboard = *bridge;
+    else
+        memset(&s->clipboard, 0, sizeof(s->clipboard));
+}
+
+bool mu_clipboard_set_text(MuContext *ctx, const char *text) {
+    MuInputSeat *s = seat_of(ctx);
+    if (!ctx || !s) return false;
+    if (s->clipboard.set_text) return s->clipboard.set_text(s->clipboard.user, text ? text : "");
+    const char *src = text ? text : "";
+    strncpy(s->clipboard_buf, src, sizeof(s->clipboard_buf) - 1);
+    s->clipboard_buf[sizeof(s->clipboard_buf) - 1] = '\0';
+    return true;
+}
+
+const char *mu_clipboard_get_text(MuContext *ctx) {
+    MuInputSeat *s = seat_of(ctx);
+    if (!ctx || !s) return "";
+    if (s->clipboard.get_text) return s->clipboard.get_text(s->clipboard.user);
+    return s->clipboard_buf;
+}
+
+void mu_input_set_ime(MuContext *ctx, const MuImeCallbacks *ime) {
+    MuInputSeat *s = seat_of(ctx);
+    if (!ctx || !s) return;
+    if (ime)
+        s->ime = *ime;
+    else
+        memset(&s->ime, 0, sizeof(s->ime));
+}
+
+void mu_input_set_ime_caret_rect(MuContext *ctx, MuRect rect) {
+    MuInputSeat *s = seat_of(ctx);
+    if (!ctx || !s) return;
+    s->page_ime_caret = rect;
+    s->page_ime_caret_valid = true;
+}
+
+void mu_input_reset_page_ime_caret(MuContext *ctx) {
+    MuInputSeat *s = seat_of(ctx);
+    if (!s) return;
+    s->page_ime_caret_valid = false;
+}
+
+void mu_input_set_markup_ime_caret(MuContext *ctx, MuMarkupImeCaretFn fn, void *user) {
+    MuInputSeat *s = seat_of(ctx);
+    if (!ctx || !s) return;
+    s->markup_caret = fn;
+    s->markup_caret_user = user;
+}
+
+bool mu_input_get_ime_caret_rect(const MuContext *ctx, MuRect *out) {
+    if (!out) return false;
+    *out = (MuRect){0.f, 0.f, 0.f, 0.f};
+    if (!ctx) return false;
+    MuInputSeat *s = seat_of((MuContext *)ctx);
+    if (s && s->page_ime_caret_valid) {
+        *out = s->page_ime_caret;
+        return out->w > 0.f && out->h > 0.f;
+    }
+    if (s && s->markup_caret) return s->markup_caret((MuContext *)ctx, out, s->markup_caret_user);
+    return false;
+}
+
 void mu_input_update_hover(MuContext *ctx, MuVec2 mouse) {
     if (!ctx) return;
     mu_input_clear_hovers(ctx, ctx->root);
     MuNode *under = hit_tree(ctx, mouse);
     if (under) under->flags |= MU_NODE_HOVERED;
     ctx->hovered_id = under ? under->id : 0;
+    ctx->seat_cursor = (uint8_t)cursor_at(ctx, ctx->hovered_id);
     update_focus_flags(ctx, ctx->root);
 }
 
@@ -95,34 +261,37 @@ void mu_input_dispatch_pointer(MuContext *ctx, const MuPointerEvent *ev) {
     if (!ctx || !ev) return;
     static uint32_t pressed_target_id = 0;
 
+    MuPointerEvent pe = *ev;
+    if (!pe.modifiers) pe.modifiers = ctx->seat_modifiers;
+
     if (ctx->captured_pointer_id) {
         MuNode *cap = mu_context_find_id(ctx, NULL, ctx->captured_pointer_id);
         if (cap) {
             const MuNodeOps *ops = mu_get_node_ops(ctx, cap->kind);
-            if (ops && ops->on_pointer) ops->on_pointer(ctx, cap, ev);
+            if (ops && ops->on_pointer) ops->on_pointer(ctx, cap, &pe);
         }
-        if (ev->released) ctx->captured_pointer_id = 0;
+        if (pe.released) ctx->captured_pointer_id = 0;
         return;
     }
 
-    MuNode *under = hit_tree(ctx, ev->position);
-    if (ev->drag) return;
+    MuNode *under = hit_tree(ctx, pe.position);
+    if (pe.drag) return;
 
-    if (ev->pressed) {
+    if (pe.pressed) {
         pressed_target_id = under ? under->id : 0;
         if (under) {
             under->flags |= MU_NODE_PRESSED;
             if (under->flags & MU_NODE_FOCUSABLE) mu_focus_set(ctx, under->id);
             const MuNodeOps *ops = mu_get_node_ops(ctx, under->kind);
-            if (ops && ops->on_pointer) ops->on_pointer(ctx, under, ev);
+            if (ops && ops->on_pointer) ops->on_pointer(ctx, under, &pe);
         }
-    } else if (ev->released) {
+    } else if (pe.released) {
         MuNode *target = under;
         if (!target && pressed_target_id) target = mu_context_find_id(ctx, NULL, pressed_target_id);
         if (target) {
             target->flags &= ~MU_NODE_PRESSED;
             const MuNodeOps *ops = mu_get_node_ops(ctx, target->kind);
-            if (ops && ops->on_pointer) ops->on_pointer(ctx, target, ev);
+            if (ops && ops->on_pointer) ops->on_pointer(ctx, target, &pe);
         }
         pressed_target_id = 0;
     }
@@ -149,8 +318,7 @@ static void mu_tab_focus_collect(MuTabFocusCollect *ac, MuNode *x) {
         }
         ac->buf[ac->count++] = x;
     }
-    for (int i = 0; i < x->child_count; i++)
-        mu_tab_focus_collect(ac, x->children[i]);
+    for (int i = 0; i < x->child_count; i++) mu_tab_focus_collect(ac, x->children[i]);
 }
 
 void mu_focus_advance_tab(MuContext *ctx) {
@@ -174,11 +342,19 @@ void mu_focus_advance_tab(MuContext *ctx) {
 }
 
 void mu_input_dispatch_key(MuContext *ctx, const MuKeyEvent *ev) {
-    if (!ctx || !ev || !ev->pressed) return;
+    if (!ctx || !ev) return;
+    if (!ev->pressed && !ev->released) return;
+
+    MuKeyEvent ke = *ev;
+    if (!ke.modifiers) ke.modifiers = key_modifiers(ev, ctx);
+
+    MuInputSeat *s = seat_of(ctx);
+    if (s && s->key && s->key(ctx, &ke, s->key_user)) return;
+
     MuNode *f = mu_context_find_id(ctx, NULL, ctx->focused_id);
     if (f) {
         const MuNodeOps *ops = mu_get_node_ops(ctx, f->kind);
-        if (ops && ops->on_key && ops->on_key(ctx, f, ev)) return;
+        if (ops && ops->on_key) (void)ops->on_key(ctx, f, &ke);
     }
 }
 
@@ -188,4 +364,38 @@ void mu_input_dispatch_char(MuContext *ctx, unsigned int codepoint) {
     if (!f) return;
     const MuNodeOps *ops = mu_get_node_ops(ctx, f->kind);
     if (ops && ops->on_char) ops->on_char(ctx, f, codepoint);
+}
+
+void mu_input_dispatch_wheel(MuContext *ctx, const MuWheelEvent *ev) {
+    if (!ctx || !ev) return;
+    if (ev->delta_x == 0.f && ev->delta_y == 0.f) return;
+
+    MuWheelEvent we = *ev;
+    if (!we.modifiers) we.modifiers = ctx->seat_modifiers;
+
+    MuInputSeat *s = seat_of(ctx);
+    if (s && s->wheel && s->wheel(ctx, &we, s->wheel_user)) return;
+
+    mu_widgets_dispatch_wheel(ctx, we.position, we.delta_x, we.delta_y);
+}
+
+void mu_input_dispatch_touch(MuContext *ctx, const MuTouchEvent *ev) {
+    if (!ctx || !ev) return;
+    MuTouchEvent te = *ev;
+    if (!te.modifiers) te.modifiers = ctx->seat_modifiers;
+    MuInputSeat *s = seat_of(ctx);
+    if (s && s->touch) s->touch(ctx, &te, s->touch_user);
+}
+
+void mu_context_set_on_presented(MuContext *ctx, MuPresentedFn fn, void *user) {
+    MuInputSeat *s = seat_of(ctx);
+    if (!s) return;
+    s->on_presented = fn;
+    s->on_presented_user = user;
+}
+
+void mu_frame_presented(MuContext *ctx) {
+    if (!ctx) return;
+    MuInputSeat *s = seat_of(ctx);
+    if (s && s->on_presented) s->on_presented(ctx, s->on_presented_user, ctx->frame_index, ctx->frame_dt);
 }

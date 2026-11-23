@@ -114,6 +114,10 @@ typedef struct MuImageState {
     MuRect src;
     float intrinsic_w;
     float intrinsic_h;
+    const uint32_t *live_pixels;
+    int live_w;
+    int live_h;
+    int live_stride;
 } MuImageState;
 
 typedef struct MuPanelState {
@@ -670,6 +674,9 @@ static void image_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *ou
         if (s->intrinsic_w > 0.f && s->intrinsic_h > 0.f) {
             w = s->intrinsic_w;
             h = s->intrinsic_h;
+        } else if (s->live_w > 0 && s->live_h > 0) {
+            w = (float)s->live_w;
+            h = (float)s->live_h;
         } else if (s->image_id != MU_IMAGE_INVALID) {
             float iw = 0.f, ih = 0.f;
             if (mu_image_get_size(NULL, s->image_id, &iw, &ih) && iw > 0.f && ih > 0.f) {
@@ -697,6 +704,19 @@ static void image_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *ou
 
 static void image_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuImageState *s = (MuImageState *)node->state;
+    MuDrawImageOpts opts;
+    mu_draw_image_opts_init(&opts);
+    opts.fit = s ? s->fit : MU_IMAGE_FIT_CONTAIN;
+    opts.tint = s ? s->tint : (MuColor){255, 255, 255, 255};
+    opts.radius = s ? s->radius : MU_IMAGE_PLACEHOLDER_RADIUS;
+    if (s) opts.src = s->src;
+
+    if (s && s->live_pixels && s->live_w > 0 && s->live_h > 0) {
+        mu_draw_image_rgba_buffer(rc, s->live_pixels, s->live_w, s->live_h, s->live_stride, node->bounds,
+                                  &opts);
+        return;
+    }
+
     if (!s || s->image_id == MU_IMAGE_INVALID) {
         MuStyleSnapshot st;
         mu_style_resolve(ctx, node, &st);
@@ -705,12 +725,6 @@ static void image_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
         return;
     }
 
-    MuDrawImageOpts opts;
-    mu_draw_image_opts_init(&opts);
-    opts.fit = s->fit;
-    opts.tint = s->tint;
-    opts.radius = s->radius;
-    opts.src = s->src;
     mu_draw_image(rc, s->image_id, node->bounds, &opts);
 }
 
@@ -722,6 +736,8 @@ static const MuNodeOps image_ops = {.destroy_state = image_destroy,
                                     .on_pointer = NULL,
                                     .on_key = NULL,
                                     .on_char = NULL};
+
+extern bool mu_markup_ime_caret_from_widget(MuContext *ctx, MuRect *out, void *user);
 
 void mu_widgets_basic_register(MuContext *ctx) {
     if (!ctx || ctx->widgets_basic_kinds)
@@ -744,6 +760,7 @@ void mu_widgets_basic_register(MuContext *ctx) {
     mu_popup_register(ctx);
     mu_list_register(ctx);
     mu_tabs_register(ctx);
+    mu_input_set_markup_ime_caret(ctx, mu_markup_ime_caret_from_widget, NULL);
 }
 
 uint32_t mu_kind_panel(const MuContext *ctx) {
@@ -1059,6 +1076,8 @@ void mu_image_set_id(MuNode *image, uint32_t image_id) {
     s->image_id = image_id;
     s->intrinsic_w = 0.f;
     s->intrinsic_h = 0.f;
+    s->live_pixels = NULL;
+    s->live_w = s->live_h = s->live_stride = 0;
     mu_layout_mark_dirty(image);
 }
 
@@ -1106,5 +1125,20 @@ void mu_image_set_src_rect(MuNode *image, MuRect src) {
     s->src = src;
     s->intrinsic_w = 0.f;
     s->intrinsic_h = 0.f;
+    mu_layout_mark_dirty(image);
+}
+
+void mu_image_bind_pixels(MuNode *image, const uint32_t *pixels, int w, int h, int stride_bytes) {
+    if (!image) return;
+    MuImageState *s = (MuImageState *)image->state;
+    if (!s) return;
+    s->live_pixels = pixels;
+    s->live_w = w;
+    s->live_h = h;
+    s->live_stride = stride_bytes > 0 ? stride_bytes : w * 4;
+    if (w > 0 && h > 0) {
+        s->intrinsic_w = (float)w;
+        s->intrinsic_h = (float)h;
+    }
     mu_layout_mark_dirty(image);
 }

@@ -34,6 +34,7 @@ typedef struct MuSoftClip {
 typedef struct MuSoftImageSlot {
     uint32_t *pixels; /* ARGB8888, width*height, owned */
     int width, height;
+    int row_stride; /* uint32_t values per row; 0 means width (tight) */
 } MuSoftImageSlot;
 
 /*

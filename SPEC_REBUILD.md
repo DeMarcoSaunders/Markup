@@ -1,5 +1,26 @@
 # MarkUp UI — Rebuild Specification
 
+> **Historical — this is the spec v2 was designed from, not a description of v2.** It is
+> kept for the design reasoning (why the v1 implementation fought itself, what the node /
+> ops model is for), which still holds. Its *stack* premises no longer do, and in one case
+> inverted:
+>
+> - **"Raylib as the only mandatory backend"** / **"shipping non-Raylib render backends in
+>   core"** as a non-goal — both reversed. v2 ships four backends behind one seam
+>   (`markup::soft`, `markup::sdl` + `markup::skia`, `markup::raylib`), the software
+>   rasterizer is the default and the only one with no third-party dependency, and raylib
+>   is **deprecated**, off by default, and slated for removal. Read "Raylib" below as
+>   "the render backend".
+> - **Pi-friendly / resource-constrained** was the north star and still is — but the
+>   answer turned out to be the dependency-free software backend plus damage tracking
+>   (RENDERING.md), not Raylib on GLES.
+> - **Section 7's open decisions** were settled by the implementation, not in plan mode:
+>   widget polymorphism is a vtable (`MuNodeOps`), ids are `uint32_t`, and the raylib
+>   version / GLES question is moot now that the default path uses no GL at all.
+> - **SPEC_SOFT_BACKEND.md** is the live plan.
+>
+> For what Markup actually is today, start at **README.md**.
+
 **Purpose:** Capture the product intent of the current codebase, document why the present implementation fights itself, and define a single cohesive architecture for a clean rewrite (suitable for plan-mode design).  
 **Stack target:** C (C11 or later), [Raylib](https://www.raylib.com/) as the only mandatory backend, CMake + optional MSVC project generation.  
 **North star:** A **fully customizable**, **lightweight** way to build UIs **quickly**, including on **resource-constrained** devices (e.g. Raspberry Pi class: limited RAM/CPU, single-threaded apps).  

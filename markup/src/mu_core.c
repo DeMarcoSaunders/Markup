@@ -1,6 +1,7 @@
 #include "../include/markup/mu_core.h"
 #include "../include/markup/mu_text.h"
 #include "../include/markup/mu_layout_flex.h"
+#include "mu_input_internal.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -32,9 +33,11 @@ void mu_context_init(MuContext *ctx, size_t arena_capacity) {
     ctx->kind_names = (const char **)calloc((size_t)ctx->kind_cap, sizeof(*ctx->kind_names));
     ctx->next_node_id = 1;
     ctx->last_error = MU_OK;
+    mu_input_context_init(ctx);
 }
 
 void mu_context_shutdown(MuContext *ctx) {
+    mu_input_context_shutdown(ctx);
     /* style module freed by mu_style_shutdown if linked */
     (void)ctx->style;
     if (ctx->modal_layer) {
@@ -194,6 +197,7 @@ MuNode *mu_context_find_id(MuContext *ctx, MuNode *subtree, uint32_t id) {
 void mu_frame_begin(MuContext *ctx) {
     if (ctx->scratch) mu_arena_reset(ctx->scratch);
     ctx->frame_index++;
+    mu_input_reset_page_ime_caret(ctx);
 }
 
 void mu_frame_end(MuContext *ctx) { (void)ctx; }

@@ -30,6 +30,8 @@
 typedef struct MuPopupState {
     bool open;
     uint32_t anchor_id;
+    bool anchor_rect_valid;
+    MuRect anchor_rect;
     MuPopupPlacement placement;
     MuNode *content;
 } MuPopupState;
@@ -193,6 +195,15 @@ void mu_popup_set_anchor(MuNode *popup, MuNode *anchor) {
     MuPopupState *s = popup_state(popup);
     if (!s) return;
     s->anchor_id = anchor ? anchor->id : 0;
+    s->anchor_rect_valid = false;
+}
+
+void mu_popup_set_anchor_rect(MuNode *popup, MuRect rect) {
+    MuPopupState *s = popup_state(popup);
+    if (!s) return;
+    s->anchor_id = 0;
+    s->anchor_rect = rect;
+    s->anchor_rect_valid = rect.w > 0.f && rect.h > 0.f;
 }
 
 void mu_popup_set_placement(MuNode *popup, MuPopupPlacement placement) {
@@ -270,11 +281,17 @@ void mu_popups_sync(MuContext *ctx) {
     mu_node_set_bounds(ctx->popup_layer, root);
 
     MuNode *anchor = s->anchor_id ? mu_context_find_id(ctx, NULL, s->anchor_id) : NULL;
-    if (!anchor) return;
+    MuRect anchor_bounds;
+    if (s->anchor_rect_valid)
+        anchor_bounds = s->anchor_rect;
+    else if (anchor)
+        anchor_bounds = anchor->bounds;
+    else
+        return;
 
     MuVec2 measured = {0.f, 0.f};
     float max_w = root.w > 16.f ? root.w - 16.f : root.w;
-    float anchor_w = anchor->bounds.w > 0.f ? anchor->bounds.w : 120.f;
+    float anchor_w = anchor_bounds.w > 0.f ? anchor_bounds.w : 120.f;
   float inner_w = anchor_w > max_w ? max_w : anchor_w;
     mu_layout_measure_container(ctx, s->content, (MuVec2){inner_w, 0.f}, &measured);
 
@@ -285,14 +302,14 @@ void mu_popups_sync(MuContext *ctx) {
     if (pw < MU_POPUP_MIN_WIDTH) pw = MU_POPUP_MIN_WIDTH;
 
     float gap = 4.f;
-    float x = anchor->bounds.x;
-    float y = anchor->bounds.y + anchor->bounds.h + gap;
+    float x = anchor_bounds.x;
+    float y = anchor_bounds.y + anchor_bounds.h + gap;
 
     MuPopupPlacement place = s->placement;
     if (place == MU_POPUP_AUTO) {
         place = (y + ph > root.y + root.h) ? MU_POPUP_ABOVE : MU_POPUP_BELOW;
     }
-    if (place == MU_POPUP_ABOVE) y = anchor->bounds.y - ph - gap;
+    if (place == MU_POPUP_ABOVE) y = anchor_bounds.y - ph - gap;
 
     if (x + pw > root.x + root.w - MU_POPUP_SCREEN_MARGIN) x = root.x + root.w - MU_POPUP_SCREEN_MARGIN - pw;
     if (x < root.x + MU_POPUP_SCREEN_MARGIN) x = root.x + MU_POPUP_SCREEN_MARGIN;
@@ -316,6 +333,7 @@ void mu_popups_dispatch_pointer(MuContext *ctx, const MuPointerEvent *ev) {
         MuNode *anchor = mu_context_find_id(ctx, NULL, s->anchor_id);
         if (anchor && pt_in_rect(ev->position, anchor->bounds)) return;
     }
+    if (s && s->anchor_rect_valid && pt_in_rect(ev->position, s->anchor_rect)) return;
 
     if (ev->pressed || ev->released) mu_popup_close(ctx, popup);
 }
