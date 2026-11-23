@@ -97,9 +97,7 @@ static void popup_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     float rad = (st.radius_tl + st.radius_tr + st.radius_br + st.radius_bl) * 0.25f;
-    MuColor bg = ctx->style ? ctx->style->panel_bg : st.background;
-    MuColor border = ctx->style ? ctx->style->panel_border : st.border;
-    mu_draw_rect(rc, node->bounds, bg, border, 1.f, rad);
+    mu_draw_rect(rc, node->bounds, st.background, st.border, st.border_width, rad);
 }
 
 static bool popup_hit(MuContext *ctx, MuNode *node, MuVec2 pt) {

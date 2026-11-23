@@ -65,6 +65,7 @@ static const MuWidgetsBasicKindIds *wb_kinds(const MuContext *ctx) {
 
 typedef struct MuLabelState {
     char *text;
+    bool ellipsis;
 } MuLabelState;
 
 typedef struct MuButtonState {
@@ -232,7 +233,7 @@ static void label_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *ou
     float wrap_w = avail.x > 0.f ? avail.x - MU_LABEL_TEXT_INSET : 0.f;
     if (node->layout.max_width > 0.f && (wrap_w <= 0.f || node->layout.max_width < wrap_w))
         wrap_w = node->layout.max_width - MU_LABEL_TEXT_INSET;
-    if (wrap_w > MU_LABEL_MIN_WRAP_WIDTH)
+    if (!(s && s->ellipsis) && wrap_w > MU_LABEL_MIN_WRAP_WIDTH)
         mu_text_measure_wrapped(NULL, t, &st.text, wrap_w, &tm);
     else
         mu_text_measure(NULL, t, &st.text, &tm);
@@ -244,10 +245,17 @@ static void label_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *ou
 static void label_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
+    mu_draw_rect(rc, node->bounds, st.background, st.border, st.border_width, st.radius_tl);
     MuLabelState *s = (MuLabelState *)node->state;
     const char *t = s && s->text ? s->text : "";
     mu_push_scissor(rc, node->bounds);
-    mu_draw_text_wrapped(rc, t, node->bounds, &st.text, st.foreground);
+    if (s && s->ellipsis) {
+        MuRect text_bounds = {node->bounds.x + 2.f, node->bounds.y + 2.f,
+                              node->bounds.w - 4.f, node->bounds.h - 4.f};
+        mu_draw_text_ellipsis(rc, t, text_bounds, &st.text, st.foreground);
+    } else {
+        mu_draw_text_wrapped(rc, t, node->bounds, &st.text, st.foreground);
+    }
     mu_pop_scissor(rc);
 }
 
@@ -259,6 +267,14 @@ static const MuNodeOps label_ops = {.destroy_state = label_destroy,
                                     .on_pointer = NULL,
                                     .on_key = NULL,
                                     .on_char = NULL};
+
+void mu_label_set_ellipsis(MuNode *label, bool enabled) {
+    MuLabelState *s = label ? (MuLabelState *)label->state : NULL;
+    if (!s || s->ellipsis == enabled) return;
+    s->ellipsis = enabled;
+    mu_layout_mark_dirty(label);
+    mu_node_mark_paint_dirty(label);
+}
 
 /* --- Button --- */
 static void button_destroy(MuContext *ctx, MuNode *node) {
@@ -382,7 +398,7 @@ static void slider_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     MuSliderState *s = (MuSliderState *)node->state;
-    mu_draw_rect(rc, node->bounds, st.background, st.border, 1, 4);
+    mu_draw_rect(rc, node->bounds, st.background, st.border, st.border_width, st.radius_tl);
     if (s) {
         float t = (s->value - s->min_v) / (s->max_v - s->min_v + 1e-6f);
         MuRect thumb = {node->bounds.x + t * (node->bounds.w - 14), node->bounds.y + 2, 12, node->bounds.h - 4};
@@ -434,7 +450,7 @@ static void checkbox_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     MuCheckboxState *s = (MuCheckboxState *)node->state;
-    mu_draw_rect(rc, node->bounds, st.background, st.border, 2, 4);
+    mu_draw_rect(rc, node->bounds, st.background, st.border, st.border_width, st.radius_tl);
     if (s && s->checked) {
         MuRect in = {node->bounds.x + 5, node->bounds.y + 5, node->bounds.w - 10, node->bounds.h - 10};
         mu_draw_rect(rc, in, st.foreground, st.foreground, 0, 2);
@@ -555,13 +571,7 @@ static void dropdown_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     MuDropdownState *s = (MuDropdownState *)node->state;
-    MuColor border = st.border;
-    float border_w = 1.f;
-    if (node->flags & MU_NODE_HOVERED) {
-        border = st.foreground;
-        border_w = 2.f;
-    }
-    mu_draw_rect(rc, node->bounds, st.background, border, border_w, 6.f);
+    mu_draw_rect(rc, node->bounds, st.background, st.border, st.border_width, st.radius_tl);
     const char *t = (s && s->n > 0) ? s->items[s->sel] : "Select…";
     MuTextMetrics tm;
     mu_text_measure(rc, t, &st.text, &tm);
@@ -646,7 +656,7 @@ static void toast_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     MuToastState *s = (MuToastState *)node->state;
-    mu_draw_rect(rc, node->bounds, st.background, st.background, 0, st.radius_tl);
+    mu_draw_rect(rc, node->bounds, st.background, st.border, st.border_width, st.radius_tl);
     mu_draw_text(rc, s ? s->msg : "", node->bounds.x + 10, node->bounds.y + 8, &st.text, st.foreground);
 }
 
@@ -704,28 +714,32 @@ static void image_measure(MuContext *ctx, MuNode *node, MuVec2 avail, MuVec2 *ou
 
 static void image_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuImageState *s = (MuImageState *)node->state;
+    MuStyleSnapshot st;
+    mu_style_resolve(ctx, node, &st);
     MuDrawImageOpts opts;
     mu_draw_image_opts_init(&opts);
     opts.fit = s ? s->fit : MU_IMAGE_FIT_CONTAIN;
     opts.tint = s ? s->tint : (MuColor){255, 255, 255, 255};
     opts.radius = s ? s->radius : MU_IMAGE_PLACEHOLDER_RADIUS;
+    if (node->style.mask & MU_STYLE_RADIUS) opts.radius = st.radius_tl;
+    if (node->style.mask & MU_STYLE_INK) opts.tint = st.foreground;
     if (s) opts.src = s->src;
 
+    if (!s || (!s->live_pixels && s->image_id == MU_IMAGE_INVALID)) {
+        MuColor fill = (node->style.mask & MU_STYLE_FILL) ? st.background :
+                      (MuColor){st.foreground.r, st.foreground.g, st.foreground.b, 40};
+        mu_draw_rect(rc, node->bounds, fill, st.border, st.border_width, opts.radius);
+        return;
+    }
+    mu_draw_rect(rc, node->bounds, st.background, (MuColor){0}, 0.f, opts.radius);
     if (s && s->live_pixels && s->live_w > 0 && s->live_h > 0) {
         mu_draw_image_rgba_buffer(rc, s->live_pixels, s->live_w, s->live_h, s->live_stride, node->bounds,
                                   &opts);
-        return;
+    } else {
+        mu_draw_image(rc, s->image_id, node->bounds, &opts);
     }
-
-    if (!s || s->image_id == MU_IMAGE_INVALID) {
-        MuStyleSnapshot st;
-        mu_style_resolve(ctx, node, &st);
-        mu_draw_rect(rc, node->bounds, (MuColor){st.foreground.r, st.foreground.g, st.foreground.b, 40},
-                     st.border, 1.f, s ? s->radius : MU_IMAGE_PLACEHOLDER_RADIUS);
-        return;
-    }
-
-    mu_draw_image(rc, s->image_id, node->bounds, &opts);
+    if (node->style.mask & (MU_STYLE_BORDER_COLOR | MU_STYLE_BORDER_WIDTH))
+        mu_draw_rect(rc, node->bounds, (MuColor){0}, st.border, st.border_width, opts.radius);
 }
 
 static const MuNodeOps image_ops = {.destroy_state = image_destroy,

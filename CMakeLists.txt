@@ -334,6 +334,11 @@ if(MARKUP_BUILD_TESTS)
     add_test(NAME text COMMAND test_text
         "${CMAKE_CURRENT_SOURCE_DIR}/apps/demo_minimal/assets/InterVariable.ttf")
 
+    add_executable(test_style_effects tests/test_style_effects.c)
+    target_link_libraries(test_style_effects PRIVATE markup_widgets_basic markup_input markup_soft)
+    add_test(NAME style_effects COMMAND test_style_effects
+        "${CMAKE_CURRENT_SOURCE_DIR}/apps/demo_minimal/assets/InterVariable.ttf")
+
     # Blit tests build their images in memory; the trailing path also exercises real
     # file decoding, which is the part that silently failed when libpng was absent.
     add_executable(test_image tests/test_image.c)

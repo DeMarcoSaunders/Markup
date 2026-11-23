@@ -81,9 +81,10 @@ void mu_style_resolve(MuContext *ctx, MuNode *node, MuStyleSnapshot *out) {
         out->background = (MuColor){255, 255, 255, 255};
         out->foreground = (MuColor){0, 0, 0, 255};
         resolve_text_defaults(NULL, &out->text);
-        return;
+        goto overrides;
     }
 
+    out->placeholder = t->muted_fg;
     resolve_text_defaults(t, &out->text);
     out->radius_tl = out->radius_tr = out->radius_br = out->radius_bl = t->default_radius;
     out->border_width = 1;
@@ -117,9 +118,17 @@ void mu_style_resolve(MuContext *ctx, MuNode *node, MuStyleSnapshot *out) {
         out->text.weight = MU_TEXT_WEIGHT_BOLD;
     } else if (strcmp(r, "group") == 0) {
         out->background = (MuColor){0, 0, 0, 0};
-    } else if (strcmp(r, "panel") == 0) {
+    } else if (strcmp(r, "panel") == 0 || strcmp(r, "popup") == 0) {
         out->background = t->panel_bg;
         out->border = t->panel_border;
+    } else if (strcmp(r, "list") == 0) {
+        out->border = t->panel_border;
+    } else if ((strcmp(r, "tab-title") == 0 || strcmp(r, "tab-close") == 0) && node->parent) {
+        MuStyleSnapshot parent;
+        mu_style_resolve(ctx, node->parent, &parent);
+        out->foreground = parent.foreground;
+        out->text = parent.text;
+        out->border_width = 0.f;
     } else if (strcmp(r, "label") == 0) {
         out->foreground = t->label_fg;
         out->background = (MuColor){0, 0, 0, 0};
@@ -138,11 +147,15 @@ void mu_style_resolve(MuContext *ctx, MuNode *node, MuStyleSnapshot *out) {
     } else if (strcmp(r, "input") == 0) {
         out->background = t->input_bg;
         out->foreground = t->input_fg;
-        out->border = t->input_border;
+        out->border = (node->flags & MU_NODE_FOCUSED) ? t->input_fg : t->input_border;
+        out->border_width = (node->flags & MU_NODE_FOCUSED) ? 2.f : 1.f;
     } else if (strcmp(r, "slider") == 0) {
+        out->radius_tl = out->radius_tr = out->radius_br = out->radius_bl = 4.f;
         out->background = t->slider_track;
         out->foreground = t->slider_thumb;
     } else if (strcmp(r, "checkbox") == 0) {
+        out->border_width = 2.f;
+        out->radius_tl = out->radius_tr = out->radius_br = out->radius_bl = 4.f;
         out->background = t->input_bg;
         out->border = t->checkbox_border;
         out->foreground = t->checkbox_fill;
@@ -150,10 +163,15 @@ void mu_style_resolve(MuContext *ctx, MuNode *node, MuStyleSnapshot *out) {
         out->background = t->input_bg;
         out->foreground = t->input_fg;
         out->border = t->input_border;
+        if (node->flags & MU_NODE_HOVERED) {
+            out->border = out->foreground;
+            out->border_width = 2.f;
+        }
     } else if (strcmp(r, "modal") == 0) {
         out->background = t->modal_bg;
         out->border = t->panel_border;
     } else if (strcmp(r, "toast") == 0) {
+        out->border_width = 0.f;
         out->background = (MuColor){31, 41, 55, 240};
         out->foreground = (MuColor){255, 255, 255, 255};
     } else if (strcmp(r, "image") == 0) {
@@ -214,5 +232,54 @@ void mu_style_resolve(MuContext *ctx, MuNode *node, MuStyleSnapshot *out) {
         out->foreground = t->label_fg;
     }
 
+overrides:
+    if (!t) out->placeholder = (MuColor){140, 150, 170, 255};
+    const MuNodeStyle *s = &node->style;
+    if (s->mask & MU_STYLE_FILL) out->background = s->fill;
+    if (s->mask & MU_STYLE_INK) out->foreground = s->ink;
+    if (s->mask & MU_STYLE_BORDER_COLOR) out->border = s->border_color;
+    if (s->mask & MU_STYLE_BORDER_WIDTH) out->border_width = s->border_width;
+    if (s->mask & MU_STYLE_RADIUS)
+        out->radius_tl = out->radius_tr = out->radius_br = out->radius_bl = s->radius;
+    if (s->mask & MU_STYLE_PLACEHOLDER_INK) out->placeholder = s->placeholder_ink;
     mu_text_style_merge(&out->text, &node->text);
+}
+
+#define COLOR_SETTER(name, field, bit) \
+    void name(MuNode *node, MuColor color) { \
+        if (!node) return; \
+        node->style.field = color; \
+        node->style.mask |= bit; \
+        node->flags |= MU_NODE_PAINT_DIRTY; \
+    }
+COLOR_SETTER(mu_node_set_fill, fill, MU_STYLE_FILL)
+COLOR_SETTER(mu_node_set_ink, ink, MU_STYLE_INK)
+COLOR_SETTER(mu_node_set_border_color, border_color, MU_STYLE_BORDER_COLOR)
+COLOR_SETTER(mu_node_set_placeholder_ink, placeholder_ink, MU_STYLE_PLACEHOLDER_INK)
+#undef COLOR_SETTER
+
+void mu_node_set_border_width(MuNode *node, float width) {
+    if (!node) return;
+    node->style.border_width = width > 0.f ? width : 0.f;
+    node->style.mask |= MU_STYLE_BORDER_WIDTH;
+    node->flags |= MU_NODE_PAINT_DIRTY;
+}
+
+void mu_node_set_radius(MuNode *node, float radius) {
+    if (!node) return;
+    node->style.radius = radius > 0.f ? radius : 0.f;
+    node->style.mask |= MU_STYLE_RADIUS;
+    node->flags |= MU_NODE_PAINT_DIRTY;
+}
+
+void mu_node_clear_style(MuNode *node, uint32_t mask) {
+    if (!node) return;
+    node->style.mask &= ~mask;
+    node->flags |= MU_NODE_PAINT_DIRTY;
+}
+
+void mu_node_set_shadow(MuNode *node, MuColor color, float blur, MuVec2 offset) {
+    if (!node) return;
+    node->shadow = (MuShadow){color, blur > 0.f ? blur : 0.f, offset};
+    node->flags |= MU_NODE_PAINT_DIRTY;
 }

@@ -20,12 +20,11 @@
  * underline in tabs_paint_overlay is the one exception, drawn after children so it sits
  * above the pane's clipped content.
  *
- * Capacity is fixed at MU_TABS_MAX with labels copied into fixed buffers, so callers may
- * pass stack strings; mu_tabs_add silently refuses past the limit.
+ * Capacity is fixed at MU_TABS_MAX. Labels are copied in full so callers may pass stack
+ * strings, and truncation happens at paint time; mu_tabs_add refuses past the limit.
  */
 
 #define MU_TABS_MAX 16
-#define MU_TABS_LABEL_LEN 64
 #define MU_TABS_BAR_HEIGHT 36.f
 #define MU_TABS_TAB_PAD_V 8.f
 #define MU_TABS_TAB_PAD_H 16.f
@@ -41,9 +40,13 @@ typedef struct MuTabsState {
     MuNode *body;
     int n;
     int sel;
-    char labels[MU_TABS_MAX][MU_TABS_LABEL_LEN];
+    char *labels[MU_TABS_MAX];
     MuNode *bar_items[MU_TABS_MAX];
     MuNode *contents[MU_TABS_MAX];
+    MuNode *titles[MU_TABS_MAX];
+    MuNode *close_buttons[MU_TABS_MAX];
+    void (*on_close)(void *user, int index);
+    void *close_user;
     void (*on_change)(void *user, int index);
     void *user;
     struct {
@@ -52,8 +55,6 @@ typedef struct MuTabsState {
         int index;
     } picks[MU_TABS_MAX];
 } MuTabsState;
-
-static uint32_t tabs_kind_id = 0;
 
 static MuTabsState *tabs_state(MuNode *node) {
     return node ? (MuTabsState *)node->state : NULL;
@@ -79,7 +80,19 @@ static void tabs_update_styles(MuNode *tabs) {
     MuTabsState *s = tabs_state(tabs);
     if (!s) return;
     for (int i = 0; i < s->n; i++) {
-        if (s->bar_items[i]) s->bar_items[i]->role = (i == s->sel) ? "tab-selected" : "tab";
+        const char *role = (i == s->sel) ? "tab-selected" : "tab";
+        if (s->bar_items[i]) {
+            s->bar_items[i]->role = role;
+            mu_node_mark_paint_dirty(s->bar_items[i]);
+        }
+        if (s->titles[i]) {
+            s->titles[i]->role = "tab-title";
+            mu_node_mark_paint_dirty(s->titles[i]);
+        }
+        if (s->close_buttons[i]) {
+            s->close_buttons[i]->role = "tab-close";
+            mu_node_mark_paint_dirty(s->close_buttons[i]);
+        }
         if (s->contents[i]) {
             if (i == s->sel)
                 s->contents[i]->flags |= MU_NODE_VISIBLE;
@@ -99,8 +112,17 @@ static void tabs_pick(void *user) {
     mu_tabs_set_selection(u->ctx, u->tabs, u->index);
 }
 
+static void tabs_close(void *user) {
+    /* Same pick record as tabs_pick; the callback decides what closing means. */
+    struct { MuContext *ctx; MuNode *tabs; int index; } *u = user;
+    MuTabsState *s = u ? tabs_state(u->tabs) : NULL;
+    if (s && s->on_close) s->on_close(s->close_user, u->index);
+}
+
 static void tabs_destroy(MuContext *ctx, MuNode *node) {
     (void)ctx;
+    MuTabsState *s = tabs_state(node);
+    if (s) for (int i = 0; i < s->n; i++) free(s->labels[i]);
     free(node->state);
     node->state = NULL;
 }
@@ -223,24 +245,26 @@ static const MuNodeOps tabs_node_ops = {
 };
 
 void mu_tabs_register(MuContext *ctx) {
-    (void)ctx;
-    if (!tabs_kind_id) tabs_kind_id = mu_register_node_kind(ctx, "tabs", &tabs_node_ops);
+    if (ctx && !mu_kind_tabs(ctx)) mu_register_node_kind(ctx, "tabs", &tabs_node_ops);
 }
 
 uint32_t mu_kind_tabs(const MuContext *ctx) {
-    (void)ctx;
-    return tabs_kind_id;
+    if (!ctx) return 0;
+    for (int i = 0; i < ctx->kind_count; i++)
+        if (ctx->kind_ops[i] == &tabs_node_ops) return (uint32_t)i + 1u;
+    return 0;
 }
 
 MuNode *mu_make_tabs(MuContext *ctx) {
-    if (!ctx || !tabs_kind_id) return NULL;
+    uint32_t kind = mu_kind_tabs(ctx);
+    if (!kind) return NULL;
 
     MuTabsState *s = (MuTabsState *)calloc(1, sizeof(MuTabsState));
     if (!s) return NULL;
     s->sel = -1;
     s->ctx = ctx;
 
-    MuNode *tabs = mu_node_create(ctx, tabs_kind_id, s);
+    MuNode *tabs = mu_node_create(ctx, kind, s);
     if (!tabs) {
         free(s);
         return NULL;
@@ -280,8 +304,9 @@ MuNode *mu_tabs_add(MuContext *ctx, MuNode *tabs, const char *label) {
 
     int i = s->n;
     const char *src = label ? label : "";
-    strncpy(s->labels[i], src, MU_TABS_LABEL_LEN - 1);
-    s->labels[i][MU_TABS_LABEL_LEN - 1] = '\0';
+    s->labels[i] = (char *)malloc(strlen(src) + 1u);
+    if (!s->labels[i]) return NULL;
+    strcpy(s->labels[i], src);
 
     s->picks[i].ctx = ctx;
     s->picks[i].tabs = tabs;
@@ -297,7 +322,20 @@ MuNode *mu_tabs_add(MuContext *ctx, MuNode *tabs, const char *label) {
 
     MuNode *lbl = mu_make_label(ctx, s->labels[i]);
     mu_node_set_hit_transparent(lbl, true);
+    mu_label_set_ellipsis(lbl, true);
+    mu_layout_set_flex(lbl, 1.f, 1.f, MU_FLEX_BASIS_AUTO);
+    mu_layout_set_align_items(tab, MU_ALIGN_CENTER);
     mu_node_add_child(ctx, tab, lbl);
+    s->titles[i] = lbl;
+
+    MuNode *close = mu_make_button(ctx, "\xC3\x97", tabs_close, &s->picks[i]);
+    mu_layout_set_flex(close, 0.f, 0.f, 24.f);
+    mu_layout_set_min_size(close, 24.f, 20.f);
+    mu_layout_set_max_size(close, 24.f, 20.f);
+    mu_node_set_border_width(close, 0.f);
+    if (!s->on_close) close->flags &= ~MU_NODE_VISIBLE;
+    mu_node_add_child(ctx, tab, close);
+    s->close_buttons[i] = close;
 
     MuNode *pane = mu_make_panel(ctx, true);
     pane->role = "group";
@@ -356,4 +394,22 @@ void mu_tabs_set_on_change(MuNode *tabs, void (*cb)(void *user, int index), void
     if (!s) return;
     s->on_change = cb;
     s->user = user;
+}
+
+MuNode *mu_tabs_tab(MuNode *tabs, int index) {
+    MuTabsState *s = tabs_state(tabs);
+    return s && index >= 0 && index < s->n ? s->bar_items[index] : NULL;
+}
+
+void mu_tabs_set_on_close(MuNode *tabs, void (*cb)(void *user, int index), void *user) {
+    MuTabsState *s = tabs_state(tabs);
+    if (!s) return;
+    s->on_close = cb;
+    s->close_user = user;
+    for (int i = 0; i < s->n; i++) {
+        if (cb) s->close_buttons[i]->flags |= MU_NODE_VISIBLE;
+        else s->close_buttons[i]->flags &= ~MU_NODE_VISIBLE;
+    }
+    mu_layout_mark_dirty(tabs);
+    mu_node_mark_paint_dirty(tabs);
 }

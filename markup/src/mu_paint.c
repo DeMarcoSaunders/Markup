@@ -296,6 +296,25 @@ static MuRect rect_shift(MuRect r, MuVec2 off) {
     return r;
 }
 
+MuRect mu_node_paint_bounds(const MuNode *node) {
+    if (!node) return (MuRect){0};
+    MuRect r = node->bounds;
+    if (!node->shadow.color.a || !rect_valid(r)) return r;
+    float reach = node->shadow.blur > 0.f ? node->shadow.blur + 4.f : 1.f;
+    MuRect shadow = {r.x + node->shadow.offset.x - reach,
+                     r.y + node->shadow.offset.y - reach,
+                     r.w + 2.f * reach, r.h + 2.f * reach};
+    return rect_union(r, shadow);
+}
+
+static void paint_shadow(MuContext *ctx, MuRenderContext *rc, MuNode *node) {
+    if (!node->shadow.color.a) return;
+    MuStyleSnapshot st;
+    mu_style_resolve(ctx, node, &st);
+    mu_draw_shadow(rc, node->bounds, st.radius_tl, node->shadow.color,
+                   node->shadow.blur, node->shadow.offset);
+}
+
 /*
  * `inside` is a bitmask of the tracked backdrops whose subtree this node sits in. A node
  * is considered inside its own entry: a glass panel's own hover changes how it paints,
@@ -305,7 +324,7 @@ static MuRect rect_shift(MuRect r, MuVec2 off) {
  * is the *painted* rect that gets compared, not the layout one: a button lifting on hover
  * never changes its bounds at all, only where it is drawn.
  */
-static void collect_node(MuContext *ctx, MuNode *n, uint32_t inside, MuVec2 off) {
+static void collect_node(MuContext *ctx, MuNode *n, uint32_t inside, MuVec2 off, bool ancestors_visible) {
     if (!n) return;
 
     /* Step the node's own motion before looking at it, so a change made here is damaged
@@ -317,13 +336,16 @@ static void collect_node(MuContext *ctx, MuNode *n, uint32_t inside, MuVec2 off)
     off.x += n->paint_offset.x;
     off.y += n->paint_offset.y;
     MuRect painted = rect_shift(n->bounds, off);
+    MuRect footprint = rect_shift(mu_node_paint_bounds(n), off);
 
     uint32_t style = n->flags & MU_NODE_STYLE_FLAGS;
-    bool visible = (n->flags & MU_NODE_VISIBLE) != 0;
+    if (!ancestors_visible) style &= ~MU_NODE_VISIBLE;
+    bool visible = (style & MU_NODE_VISIBLE) != 0;
     bool was_visible = (n->prev_flags & MU_NODE_VISIBLE) != 0;
 
     bool changed = (n->flags & MU_NODE_PAINT_DIRTY) != 0 || style != (n->prev_flags & MU_NODE_STYLE_FLAGS) ||
-                   !rect_equal(painted, n->prev_bounds);
+                   !rect_equal(painted, n->prev_bounds) ||
+                   !rect_equal(footprint, n->prev_paint_bounds);
 
     /* A node counts as inside its own entry: a glass panel's own hover changes how it
      * paints, but it paints on top of its blur, so it cannot invalidate the blur input. */
@@ -340,22 +362,23 @@ static void collect_node(MuContext *ctx, MuNode *n, uint32_t inside, MuVec2 off)
         /* Both regions: whatever the node used to cover has to be repainted too, or a
          * move leaves a copy of the node behind at its old position. */
         if (was_visible) {
-            mu_damage_add(ctx, n->prev_bounds);
-            backdrop_outside_add(ctx, inside, n->prev_bounds);
+            mu_damage_add(ctx, n->prev_paint_bounds);
+            backdrop_outside_add(ctx, inside, n->prev_paint_bounds);
         }
         if (visible) {
-            mu_damage_add(ctx, painted);
-            backdrop_outside_add(ctx, inside, painted);
+            mu_damage_add(ctx, footprint);
+            backdrop_outside_add(ctx, inside, footprint);
         }
     }
 
     n->prev_bounds = painted;
+    n->prev_paint_bounds = footprint;
     n->prev_flags = style;
     n->flags &= ~MU_NODE_PAINT_DIRTY;
 
     /* Descend even into hidden subtrees: a child that was visible last frame still owes
      * damage for the area it is vacating. */
-    for (int i = 0; i < n->child_count; i++) collect_node(ctx, n->children[i], inside, off);
+    for (int i = 0; i < n->child_count; i++) collect_node(ctx, n->children[i], inside, off, visible);
 }
 
 static MuRect rect_inflate(MuRect r, float m) {
@@ -386,7 +409,7 @@ static MuRect rect_inflate(MuRect r, float m) {
 static void expand_for_backdrops(MuContext *ctx, MuNode *n, bool *grew) {
     if (!n) return;
     /* prev_bounds, freshly set by collect_node, is where the node is drawn this frame. */
-    if (n->backdrop_blur > 0.f && (n->flags & MU_NODE_VISIBLE) &&
+    if (n->backdrop_blur > 0.f && (n->prev_flags & MU_NODE_VISIBLE) &&
         mu_region_overlaps(&ctx->damage, n->prev_bounds)) {
         MuRect needed = rect_inflate(n->prev_bounds, n->backdrop_blur + 1.f);
         if (!region_contains_rect(&ctx->damage, needed)) {
@@ -443,9 +466,9 @@ void mu_damage_collect(MuContext *ctx) {
     gather_backdrops(ctx, ctx->modal_layer);
 
     const MuVec2 none = {0.f, 0.f};
-    collect_node(ctx, ctx->root, 0u, none);
-    collect_node(ctx, ctx->popup_layer, 0u, none);
-    collect_node(ctx, ctx->modal_layer, 0u, none);
+    collect_node(ctx, ctx->root, 0u, none, true);
+    collect_node(ctx, ctx->popup_layer, 0u, none, true);
+    collect_node(ctx, ctx->modal_layer, 0u, none, true);
 
     mark_backdrops_dirty(ctx);
 
@@ -486,6 +509,7 @@ static void paint_tree_clipped(MuContext *ctx, MuRenderContext *rc, MuNode *node
     /* A clipping container confines its children, so it can be pruned wholesale.
      * Non-clipping nodes are only pruned on their own bounds; children are tested
      * individually because they may extend beyond the parent. */
+    if (rect_overlaps(mu_node_paint_bounds(node), area)) paint_shadow(ctx, rc, node);
     if (!(node->flags & MU_NODE_CLIP_CHILDREN) || rect_overlaps(node->bounds, area)) {
         const MuNodeOps *ops = mu_get_node_ops(ctx, node->kind);
         bool self_visible = rect_overlaps(node->bounds, area);
@@ -511,6 +535,7 @@ static void paint_tree_offset(MuContext *ctx, MuRenderContext *rc, MuNode *node,
     MuRect layout_bounds = node->bounds;
     node->bounds = rect_shift(layout_bounds, off);
 
+    paint_shadow(ctx, rc, node);
     if (node->flags & MU_NODE_CLIP_CHILDREN) mu_push_scissor(rc, node->bounds);
 
     const MuNodeOps *ops = mu_get_node_ops(ctx, node->kind);

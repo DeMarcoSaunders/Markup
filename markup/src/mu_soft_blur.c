@@ -644,3 +644,60 @@ void mu_soft_backdrop_cache_free_all(MuRenderContext *rc) {
         rc->backdrop_cache[i].node = NULL;
     }
 }
+
+/* Cast a shape mask, not a blurred copy of the backdrop. Reuse the separable box
+ * passes on a white RGB coverage mask; apply color/opacity only at composite time,
+ * preserving precision for faint shadows such as black at six percent. */
+void mu_draw_shadow(MuRenderContext *rc, MuRect r, float radius, MuColor color,
+                     float blur, MuVec2 offset) {
+    if (!rc || !rc->pixels || !color.a || r.w <= 0.f || r.h <= 0.f) return;
+    r.x += offset.x;
+    r.y += offset.y;
+    if (!(blur > 0.f)) {
+        mu_draw_rect(rc, r, color, (MuColor){0}, 0.f, radius);
+        return;
+    }
+    float scale = mu_soft_scale(rc);
+    r = (MuRect){r.x * scale, r.y * scale, r.w * scale, r.h * scale};
+    radius = fmaxf(0.f, fminf(radius * scale, fminf(r.w, r.h) * .5f));
+    blur *= scale;
+    int box_r = box_radius_for(blur);
+    int reach = box_r * MU_BLUR_PASSES + 1;
+    /* Keep the write extent within the footprint used by damage/culling, even
+     * when a scale below one rounds a tiny physical blur up to a larger kernel. */
+    float write_reach = blur + 4.f * scale;
+    MuRect extent = {r.x - write_reach, r.y - write_reach,
+                     r.w + 2.f * write_reach, r.h + 2.f * write_reach};
+    int x0, y0, x1, y1;
+    if (!blur_write_rect(rc, extent, &x0, &y0, &x1, &y1)) return;
+    /* Read a full kernel beyond the write clip. A narrow damage scissor must
+     * produce precisely the same mask as an unrestricted draw. */
+    int sx = x0 - reach, sy = y0 - reach;
+    int w = x1 - x0 + 2 * reach, h = y1 - y0 + 2 * reach;
+    if (w <= 0 || h <= 0 || (size_t)w * (size_t)h > INT_MAX / 2) return;
+    int pixels = w * h;
+    if (!scratch_reserve(rc, pixels)) return;
+    uint32_t *a = rc->blur_scratch;
+    uint32_t *b = a + rc->blur_scratch_cap;
+    float cx = r.x + r.w * .5f, cy = r.y + r.h * .5f;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            float d = blur_sdf_round_box(sx + x + .5f - cx, sy + y + .5f - cy,
+                                         r.w * .5f, r.h * .5f, radius);
+            float coverage = fmaxf(0.f, fminf(1.f, .5f - d));
+            uint32_t v = (uint32_t)(coverage * 255.f + .5f);
+            a[(size_t)y * w + x] = v * 0x010101u;
+        }
+    }
+    for (int i = 0; i < MU_BLUR_PASSES; i++) {
+        box_blur_h(a, b, w, h, box_r);
+        box_blur_v(b, a, w, h, box_r);
+    }
+    for (int y = y0; y < y1; y++) {
+        uint32_t *row = rc->pixels + (size_t)y * rc->stride;
+        for (int x = x0; x < x1; x++) {
+            uint32_t coverage = a[(size_t)(y - sy) * w + (x - sx)] & 255u;
+            row[x] = mu_soft_blend_over(row[x], color, mu_soft_mul255(coverage, color.a));
+        }
+    }
+}

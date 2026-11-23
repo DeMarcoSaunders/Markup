@@ -22,6 +22,11 @@ int mu_tabs_get_selection(const MuNode *tabs);
 void mu_tabs_set_selection(MuContext *ctx, MuNode *tabs, int index);
 const char *mu_tabs_label(const MuNode *tabs, int index);
 void mu_tabs_set_on_change(MuNode *tabs, void (*cb)(void *user, int index), void *user);
+/** Tab header for per-node styling or sizing. */
+MuNode *mu_tabs_tab(MuNode *tabs, int index);
+/** Show a fixed 24-point close slot on each tab. Callback owns the close action;
+ * passing NULL hides the slots. Titles always stay on one line and ellipsize. */
+void mu_tabs_set_on_close(MuNode *tabs, void (*cb)(void *user, int index), void *user);
 
 #ifdef __cplusplus
 }

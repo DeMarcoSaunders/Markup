@@ -29,6 +29,11 @@ void mu_text_measure_wrapped(MuRenderContext *rc, const char *text, const MuText
 void mu_draw_text_wrapped(MuRenderContext *rc, const char *text, MuRect bounds, const MuTextStyle *style,
                           MuColor fg);
 
+/** One line, UTF-8 safe, with U+2026 when shortened. No inset; clips to bounds.
+ * If even the ellipsis cannot fit, draws nothing. Newlines end the first line. */
+void mu_draw_text_ellipsis(MuRenderContext *rc, const char *text, MuRect bounds,
+                           const MuTextStyle *style, MuColor fg);
+
 /** Load an additional font file; returns id >= 1, or 0 on failure. */
 uint32_t mu_font_load_file(MuRenderContext *rc, const char *path, const char *family_name);
 
@@ -36,6 +41,9 @@ void mu_push_scissor(MuRenderContext *rc, MuRect r);
 void mu_pop_scissor(MuRenderContext *rc);
 
 void mu_draw_rect(MuRenderContext *rc, MuRect r, MuColor fill, MuColor border, float border_w, float radius);
+/** Cast a blurred rounded-rectangle mask, source-over, before drawing the foreground. */
+void mu_draw_shadow(MuRenderContext *rc, MuRect r, float radius, MuColor color,
+                     float blur, MuVec2 offset);
 void mu_draw_text(MuRenderContext *rc, const char *text, float x, float y, const MuTextStyle *style,
                   MuColor fg);
 

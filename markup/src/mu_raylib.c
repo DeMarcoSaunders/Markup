@@ -319,6 +319,15 @@ void mu_draw_path(MuRenderContext *rc, const MuPath *path, const MuDrawPathOpts 
         mu_path_raster_stroke(path, raylib_path_span, NULL, opts->stroke, opts->stroke_width);
 }
 
+/* Deprecated backend: like backdrop blur, this degrades to a flat shape. */
+void mu_draw_shadow(MuRenderContext *rc, MuRect r, float radius, MuColor color,
+                     float blur, MuVec2 offset) {
+    (void)blur;
+    r.x += offset.x;
+    r.y += offset.y;
+    mu_draw_rect(rc, r, color, (MuColor){0}, 0.f, radius);
+}
+
 void mu_draw_rect(MuRenderContext *rc, MuRect r, MuColor fill, MuColor border, float border_w, float radius) {
     (void)rc;
     if (fill.a > 0)

@@ -2,6 +2,7 @@
 #include "../include/markup/mu_text.h"
 #include <stdio.h> /* snprintf -- MSVC accepts it undeclared, clang does not */
 #include <string.h>
+#include <stdlib.h>
 
 static float text_line_height(MuRenderContext *rc, const MuTextStyle *style) {
     MuTextMetrics m;
@@ -145,4 +146,41 @@ void mu_draw_text_wrapped(MuRenderContext *rc, const char *text, MuRect bounds, 
 
     if (line[0] && y + line_h <= bounds.y + bounds.h + 0.5f)
         mu_draw_text(rc, line, bounds.x + pad, y, style, fg);
+}
+
+void mu_draw_text_ellipsis(MuRenderContext *rc, const char *text, MuRect bounds,
+                           const MuTextStyle *style, MuColor fg) {
+    if (!text || bounds.w <= 0.f || bounds.h <= 0.f) return;
+    size_t len = strcspn(text, "\r\n");
+    char *line = (char *)malloc(len + 4u);
+    if (!line) return;
+    memcpy(line, text, len);
+    line[len] = '\0';
+    MuTextMetrics tm;
+    mu_text_measure(rc, line, style, &tm);
+    if (tm.width > bounds.w || text[len]) {
+        const char *ellipsis = "\xE2\x80\xA6";
+        mu_text_measure(rc, ellipsis, style, &tm);
+        if (tm.width > bounds.w) { free(line); return; }
+        size_t lo = 0, hi = len;
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo + 1u) / 2u;
+            /* Round up to a UTF-8 boundary. lo and hi always are boundaries. */
+            while (mid < hi && ((unsigned char)text[mid] & 0xC0u) == 0x80u) mid++;
+            memcpy(line, text, mid);
+            memcpy(line + mid, ellipsis, 4u);
+            mu_text_measure(rc, line, style, &tm);
+            if (tm.width <= bounds.w) lo = mid;
+            else {
+                hi = mid - 1u;
+                while (hi > lo && ((unsigned char)text[hi] & 0xC0u) == 0x80u) hi--;
+            }
+        }
+        memcpy(line, text, lo);
+        memcpy(line + lo, ellipsis, 4u);
+    }
+    mu_push_scissor(rc, bounds);
+    mu_draw_text(rc, line, bounds.x, bounds.y, style, fg);
+    mu_pop_scissor(rc);
+    free(line);
 }

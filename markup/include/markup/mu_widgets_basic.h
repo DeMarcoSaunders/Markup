@@ -56,6 +56,8 @@ void mu_modal_bind_layer(MuContext *ctx, MuNode *modal_root);
 void mu_modal_set_visible(MuContext *ctx, MuNode *modal, bool show);
 
 void mu_label_set_text(MuNode *label, const char *text);
+/** Opt into one line with an ellipsis. Default labels continue to wrap. */
+void mu_label_set_ellipsis(MuNode *label, bool enabled);
 float mu_slider_get_value(const MuNode *slider);
 const char *mu_dropdown_selected_text(const MuNode *dropdown);
 int mu_dropdown_get_selection(const MuNode *dropdown);

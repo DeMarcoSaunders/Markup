@@ -123,6 +123,16 @@ MuNode *mu_node_create(MuContext *ctx, uint32_t kind, void *state) {
     return n;
 }
 
+static void damage_subtree(MuContext *ctx, MuNode *node) {
+    if (!ctx || !node) return;
+    /* Descendants can cast shadows beyond a non-clipping container. */
+    if ((node->flags | node->prev_flags) & MU_NODE_VISIBLE) {
+        mu_damage_add(ctx, node->bounds);
+        mu_damage_add(ctx, node->prev_paint_bounds);
+    }
+    for (int i = 0; i < node->child_count; i++) damage_subtree(ctx, node->children[i]);
+}
+
 void mu_node_destroy_recursive(MuContext *ctx, MuNode *node) {
     if (!node) return;
     /* Repaint what it covered — once freed, nothing is left to report the damage. Both
@@ -130,7 +140,7 @@ void mu_node_destroy_recursive(MuContext *ctx, MuNode *node) {
      * moving it (zero-sized, so ignored, if it never painted). */
     if (ctx && (node->flags & MU_NODE_VISIBLE)) {
         mu_damage_add(ctx, node->bounds);
-        mu_damage_add(ctx, node->prev_bounds);
+        mu_damage_add(ctx, node->prev_paint_bounds);
     }
     destroy_subtree_states(ctx, node);
     free_subtree(ctx, node);
@@ -154,10 +164,7 @@ bool mu_node_add_child(MuContext *ctx, MuNode *parent, MuNode *child) {
 
 void mu_node_remove_child(MuContext *ctx, MuNode *parent, MuNode *child) {
     if (!parent || !child) return;
-    if (ctx && (child->flags & MU_NODE_VISIBLE)) {
-        mu_damage_add(ctx, child->bounds);
-        mu_damage_add(ctx, child->prev_bounds);
-    }
+    damage_subtree(ctx, child);
     for (int i = 0; i < parent->child_count; i++) {
         if (parent->children[i] == child) {
             memmove(&parent->children[i], &parent->children[i + 1],

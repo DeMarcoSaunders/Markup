@@ -13,6 +13,7 @@ look like anything at all.
 - [Frosted glass](#frosted-glass)
 - [The blur cache](#the-blur-cache)
 - [Performance](#performance)
+- [Per-node styling, shadows, and ellipsis](#per-node-styling-shadows-and-ellipsis)
 - [Gotchas](#gotchas)
 
 ---
@@ -372,3 +373,60 @@ the blur legitimately needs to see its surroundings. Writing stays clipped.
 | `tests/test_damage.c` | Damage and cache behaviour, including the partial-vs-full A/B |
 | `tests/test_blur.c` | Blur correctness: edges, tint, corners, clipping |
 | `SPEC_SOFT_BACKEND.md` | How the backend was built, phase by phase |
+
+
+## Per-node styling, shadows, and ellipsis
+
+Role tokens remain shared defaults. Per-node setters override only the properties you
+set, after interaction states resolve. Transparent colors and zero widths/radii are
+explicit values; `mu_node_clear_style(node, MU_STYLE_FILL | MU_STYLE_RADIUS)` restores
+those theme defaults. Setters mark paint damage automatically. Custom widget paint ops
+should consume `MuStyleSnapshot` to honor the same overrides.
+
+A search field can keep its white fill, 14-point corners and one-point hairline even
+when focused, while its placeholder has a separate ink color:
+
+```c
+MuNode *search = mu_make_textinput(&ctx, "");
+mu_textinput_set_placeholder(search, "Search");
+mu_node_set_fill(search, (MuColor){255, 255, 255, 255});
+mu_node_set_ink(search, (MuColor){140, 140, 140, 255});
+mu_node_set_placeholder_ink(search, (MuColor){212, 212, 212, 255});
+mu_node_set_border_color(search, (MuColor){239, 239, 239, 255});
+mu_node_set_border_width(search, 1.f);
+mu_node_set_radius(search, 14.f);
+mu_node_set_shadow(search, (MuColor){0, 0, 0, 15}, 24.f, (MuVec2){0.f, 8.f});
+```
+
+The shadow casts the rounded box's coverage mask, applies three separable box passes
+in the software backend, then composites the requested color with source-over alpha.
+Its blur value is the approximate kernel reach in layout points; each of three passes
+uses a box radius near `blur / 3`. Skia uses a Gaussian mask with sigma `blur / 3`.
+A zero blur casts a hard rounded shadow; a transparent shadow color disables it.
+The deprecated Raylib backend uses an unblurred offset box.
+
+The tree paints a shadow before the node's own box and child clip. Ancestor clips still
+apply. Damage includes the old and new shadow footprints, including moves, paint offsets,
+resizing, hiding, and removal. A narrow damage scissor limits compositing without
+truncating the blur input. Software display scaling scales the mask, radius, blur and
+offset together. The shadow scratch buffer is reused; shadows are recomputed when painted.
+
+For tabs, `mu_tabs_tab(tabs, index)` exposes the header for individual styling. Set its
+fill to `{239,239,239,255}` for the 0.937 wash or `{0,0,0,0}` for clear; use
+`{140,140,140,255}` for muted 0.55 title ink and `{212,212,212,255}` for faint 0.83 ink.
+Header title and close ink follow the header unless explicitly overridden on those
+children. When applying selection-dependent overrides, update them from the app's
+`mu_tabs_set_on_change` callback.
+
+Labels wrap by default. `mu_label_set_ellipsis(label, true)` gives a single line and
+keeps the measured height to one line as available width shrinks. The shared
+`mu_draw_text_ellipsis` primitive measures the full string, then finds a UTF-8 codepoint
+boundary at which the prefix plus U+2026 fits. It clips to the supplied bounds, stops
+at a newline, and draws nothing when the ellipsis itself cannot fit. It has no fixed
+text-buffer cutoff. This preserves codepoints, not entire combining-character clusters.
+
+Built-in tab titles use ellipsis automatically. Calling
+`mu_tabs_set_on_close(tabs, on_close, user)` shows a 24-point close button that never
+shrinks, while the title takes the remaining space. The callback receives the tab index
+and owns the close action; `NULL` hides the slots. In a custom row, use a shrinking
+ellipsis label followed by a fixed-width child with `flex_shrink = 0` for the same layout.

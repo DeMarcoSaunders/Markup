@@ -166,8 +166,7 @@ static void list_layout_children(MuContext *ctx, MuNode *node) {
 static void list_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
-    MuColor border = ctx->style ? ctx->style->panel_border : st.border;
-    mu_draw_rect(rc, node->bounds, (MuColor){0, 0, 0, 0}, border, 1.f, 6.f);
+    mu_draw_rect(rc, node->bounds, st.background, st.border, st.border_width, st.radius_tl);
 }
 
 static bool list_hit(MuContext *ctx, MuNode *node, MuVec2 pt) {

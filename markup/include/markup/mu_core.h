@@ -22,6 +22,31 @@ typedef struct MuRect {
     float x, y, w, h;
 } MuRect;
 
+typedef struct MuColor {
+    unsigned char r, g, b, a;
+} MuColor;
+
+/* Explicit bits distinguish an override of zero/transparent from theme inheritance. */
+#define MU_STYLE_FILL (1u << 0)
+#define MU_STYLE_INK (1u << 1)
+#define MU_STYLE_BORDER_COLOR (1u << 2)
+#define MU_STYLE_BORDER_WIDTH (1u << 3)
+#define MU_STYLE_RADIUS (1u << 4)
+#define MU_STYLE_PLACEHOLDER_INK (1u << 5)
+
+typedef struct MuNodeStyle {
+    uint32_t mask;
+    MuColor fill, ink, border_color, placeholder_ink;
+    float border_width, radius;
+} MuNodeStyle;
+
+typedef struct MuShadow {
+    MuColor color;
+    /* Blur reach in points (three box passes); zero gives a hard shadow. */
+    float blur;
+    MuVec2 offset;
+} MuShadow;
+
 /*
  * A bounded set of disjoint rectangles.
  *
@@ -129,6 +154,8 @@ struct MuNode {
     const char *role;
     MuLayoutStyle layout;
     MuTextStyle text;
+    MuNodeStyle style;
+    MuShadow shadow;
     /* Backdrop blur radius in pixels; 0 disables. Lives on the node rather than in
      * widget state because damage collection has to know about it — a blurred node's
      * appearance depends on pixels it does not own. */
@@ -148,6 +175,7 @@ struct MuNode {
      * resizes and hover/press/focus changes are detected automatically instead of relying
      * on every mutation site remembering to mark. */
     MuRect prev_bounds;
+    MuRect prev_paint_bounds; /* includes the shadow; prev_bounds remains the backdrop box */
     uint32_t prev_flags;
     uint8_t cursor; /* MuCursor */
 };
@@ -324,6 +352,9 @@ void mu_node_mark_paint_dirty(MuNode *node);
  * touched at all.
  */
 void mu_node_set_backdrop_blur(MuNode *node, float radius);
+
+/** Visual footprint including an optional shadow, in the node's current coordinates. */
+MuRect mu_node_paint_bounds(const MuNode *node);
 
 /** Walk the tree, accumulate damage, and re-snapshot. Called by mu_paint_all. */
 void mu_damage_collect(MuContext *ctx);

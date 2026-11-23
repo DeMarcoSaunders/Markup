@@ -17,6 +17,7 @@ static MuRenderContext *measure_rc(MuRenderContext *rc) {
 #include "core/SkColorFilter.h"
 #include "core/SkSamplingOptions.h"
 #include "core/SkBlendMode.h"
+#include "core/SkBlurTypes.h"
 #include "core/SkColor.h"
 #include "core/SkData.h"
 #include "core/SkFont.h"
@@ -25,8 +26,10 @@ static MuRenderContext *measure_rc(MuRenderContext *rc) {
 #include "core/SkImage.h"
 #include "core/SkImageInfo.h"
 #include "core/SkPaint.h"
+#include "core/SkMaskFilter.h"
 #include "core/SkPixmap.h"
 #include "core/SkPath.h"
+#include "core/SkPathBuilder.h"
 #include "core/SkRRect.h"
 #include "core/SkRect.h"
 #include "core/SkString.h"
@@ -467,6 +470,20 @@ extern "C" void mu_pop_scissor(MuRenderContext *rc) {
     rc->scissor_depth--;
 }
 
+extern "C" void mu_draw_shadow(MuRenderContext *rc, MuRect r, float radius, MuColor color,
+                                float blur, MuVec2 offset) {
+    SkCanvas *canvas = canvas_of(rc);
+    if (!canvas || !color.a || r.w <= 0.f || r.h <= 0.f) return;
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setColor(mu_to_sk(color));
+    if (blur > 0.f)
+        paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 3.f));
+    SkRRect shape;
+    shape.setRectXY(SkRect::MakeXYWH(r.x + offset.x, r.y + offset.y, r.w, r.h), radius, radius);
+    canvas->drawRRect(shape, paint);
+}
+
 extern "C" void mu_draw_rect(MuRenderContext *rc, MuRect r, MuColor fill, MuColor border, float border_w,
                              float radius) {
     SkCanvas *canvas = canvas_of(rc);
@@ -512,27 +529,28 @@ extern "C" void mu_draw_path(MuRenderContext *rc, const MuPath *path, const MuDr
         opts = &defaults;
     }
 
-    SkPath sk;
+    SkPathBuilder builder;
     float sub_x = 0.f, sub_y = 0.f;
     bool have_sub = false;
 
     for (int i = 0; i < path->count; i++) {
         switch (path->cmds[i]) {
         case MU_PATH_MOVE:
-            sk.moveTo(path->xs[i], path->ys[i]);
+            builder.moveTo(path->xs[i], path->ys[i]);
             sub_x = path->xs[i];
             sub_y = path->ys[i];
             have_sub = true;
             break;
         case MU_PATH_LINE:
-            sk.lineTo(path->xs[i], path->ys[i]);
+            builder.lineTo(path->xs[i], path->ys[i]);
             break;
         case MU_PATH_CLOSE:
-            if (have_sub) sk.close();
+            if (have_sub) builder.close();
             break;
         }
     }
 
+    SkPath sk = builder.detach();
     if (opts->fill.a > 0) {
         SkPaint fill;
         fill.setAntiAlias(true);

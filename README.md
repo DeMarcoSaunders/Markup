@@ -259,11 +259,11 @@ CloseWindow();
 |---------|----------------|
 | `markup::core` | `MuContext`, `MuNode` tree, node kind registry, arenas, modal stack hooks |
 | `markup::layout_flex` | `mu_layout_run` — flex layout, stretch, wrap, grow/shrink |
-| `markup::style` | `MuStyleModule` tokens, `mu_style_resolve` from `MuNode.role`, label word-wrap |
+| `markup::style` | `MuStyleModule` tokens, per-node overrides, `mu_style_resolve` from `MuNode.role`, word-wrap and single-line ellipsis |
 | `markup::paint` | `mu_paint_all`, `mu_paint_damaged`, damage collection and the `MuRegion` helpers, image geometry (`mu_image_fit_dst`, `mu_image_resolve_src`), image decode via stb_image (`mu_image_decode_*`) |
 | `markup::input` | Hover/focus, modal routing, pointer/key/text dispatch |
 | `markup::compose` | `mu_compose_*`, `MuIconDesc` factories |
-| `markup::soft` | CPU rasterizer — ARGB8888 surface, AA rounded rects, stb_truetype text, backdrop blur ([RENDERING.md](RENDERING.md)) |
+| `markup::soft` | CPU rasterizer — ARGB8888 surface, AA rounded rects, stb_truetype text, rounded shadows, backdrop blur ([RENDERING.md](RENDERING.md)) |
 | `markup::raylib` | **Deprecated** — Raylib `MuRenderContext`, `mu_draw_*`, `mu_raylib_frame`. No backdrop blur, no tests, off by default (`mu_raylib.h`) |
 | `markup::skia` + `markup::sdl` | Skia raster backend + SDL3 window/input (`MARKUP_WITH_SKIA`) |
 | `markup::physics` | 2D rigid bodies — SAT collision, sequential impulses, split-impulse resolution ([PHYSICS.md](PHYSICS.md)) |
@@ -341,7 +341,7 @@ n->role = "panel"; /* or widen mu_style_resolve in mu_style.c for a new token */
 mu_node_add_child(ctx, parent, n);
 ```
 
-3. **Theming**: `mu_style_resolve` keys off **`node->role`** (see **`markup/src/mu_style.c`**) — reuse a role (**`button`**, **`input`**, …) or add **`MuStyleModule`** fields plus new branches.
+3. **Theming**: `mu_style_resolve` keys off **`node->role`** (see **`markup/src/mu_style.c`**). Use roles for shared defaults and `mu_node_set_fill`, `mu_node_set_ink`, `mu_node_set_border_color`, `mu_node_set_border_width`, and `mu_node_set_radius` for individual nodes. Overrides win over hover/focus defaults, including transparent fills and zero borders. See [per-node styling, shadows, and ellipsis](RENDERING.md#per-node-styling-shadows-and-ellipsis).
 
 4. **Flex / visibility**: panels from **`mu_make_panel`**, **`flex_grow` / `flex_basis`**, **`MU_NODE_VISIBLE`**, **`mu_modal_set_visible`**, etc., as in the demos.
 

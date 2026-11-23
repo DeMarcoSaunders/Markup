@@ -303,9 +303,7 @@ static void textinput_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     MuTextInState *s = textinput_state(node);
     const char *text = s ? s->buf : "";
     bool focused = (node->flags & MU_NODE_FOCUSED) != 0;
-    MuColor border = focused ? st.foreground : st.border;
-    float border_w = focused ? 2.f : 1.f;
-    mu_draw_rect(rc, node->bounds, st.background, border, border_w, 6.f);
+    mu_draw_rect(rc, node->bounds, st.background, st.border, st.border_width, st.radius_tl);
 
     float pad = MU_TEXTINPUT_PAD_X;
     MuRect clip = {node->bounds.x + pad, node->bounds.y, node->bounds.w - pad * 2.f, node->bounds.h};
@@ -325,8 +323,7 @@ static void textinput_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
         const char *ph = (s && s->placeholder[0]) ? s->placeholder : "Type here…";
         mu_text_measure(rc, ph, &st.text, &tm);
         ty = node->bounds.y + (node->bounds.h - tm.height) * 0.5f;
-        MuColor ph_c = ctx->style ? ctx->style->muted_fg : (MuColor){140, 150, 170, 255};
-        mu_draw_text(rc, ph, tx, ty, &st.text, ph_c);
+        mu_draw_text(rc, ph, tx, ty, &st.text, st.placeholder);
     }
 
     if (focused && s) {
