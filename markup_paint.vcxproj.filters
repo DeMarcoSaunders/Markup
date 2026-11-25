@@ -7,6 +7,15 @@
     <ClCompile Include="D:\Markup\markup\src\mu_image_util.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\Markup\markup\src\mu_image_decode.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Markup\markup\src\mu_path.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="D:\Markup\markup\src\mu_path_raster.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="D:\Markup\CMakeLists.txt" />

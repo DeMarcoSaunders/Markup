@@ -7,6 +7,9 @@
     <ClCompile Include="D:\Markup\markup\src\mu_text.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\Markup\markup\src\mu_text_layout.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="D:\Markup\CMakeLists.txt" />

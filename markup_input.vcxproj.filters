@@ -4,6 +4,9 @@
     <ClCompile Include="D:\Markup\markup\src\mu_input.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\Markup\markup\src\mu_input_keymap.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="D:\Markup\CMakeLists.txt" />

@@ -7,6 +7,9 @@
     <ClCompile Include="D:\Markup\markup\src\mu_arena.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\Markup\markup\src\mu_spring.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="D:\Markup\CMakeLists.txt" />

@@ -493,6 +493,254 @@ static void test_path_stroke(void) {
     mu_soft_render_shutdown(&rc);
 }
 
+/* An integer path rect is the same pixels as mu_draw_rect, with no fringe. */
+static void test_path_rect_on_pixels_is_crisp(void) {
+    CASE("path rect on pixels is crisp");
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, 24, 24);
+    mu_soft_begin_frame(&rc, BLACK);
+
+    MuPath path;
+    mu_path_init(&path);
+    mu_path_rect(&path, (MuRect){4.f, 4.f, 10.f, 10.f});
+
+    MuDrawPathOpts opts;
+    mu_draw_path_opts_init(&opts);
+    opts.fill = RED;
+    mu_draw_path(&rc, &path, &opts);
+
+    int partial = 0;
+    for (int y = 0; y < 24; y++)
+        for (int x = 0; x < 24; x++) {
+            MuColor p = mu_soft_get_pixel(&rc, x, y);
+            if (p.r > 0 && p.r < 255) partial++;
+        }
+    CHECK(partial == 0);
+    check_pixel(&rc, 4, 4, RED);
+    check_pixel(&rc, 13, 13, RED);
+    check_pixel(&rc, 3, 4, BLACK);
+    check_pixel(&rc, 14, 13, BLACK);
+
+    mu_soft_render_shutdown(&rc);
+}
+
+/* Left edge at x=4.25 covers 75% of column 4; right edge at x=10.25 covers 25% of column 10. */
+static void test_path_subpixel_vertical_coverage(void) {
+    CASE("path subpixel vertical coverage");
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, 24, 16);
+    mu_soft_begin_frame(&rc, BLACK);
+
+    MuPath path;
+    mu_path_init(&path);
+    mu_path_rect(&path, (MuRect){4.25f, 2.f, 6.f, 4.f});
+
+    MuDrawPathOpts opts;
+    mu_draw_path_opts_init(&opts);
+    opts.fill = RED;
+    mu_draw_path(&rc, &path, &opts);
+
+    check_pixel(&rc, 3, 3, BLACK);
+    check_pixel(&rc, 4, 3, (MuColor){191, 0, 0, 255});
+    check_pixel(&rc, 5, 3, RED);
+    check_pixel(&rc, 9, 3, RED);
+    check_pixel(&rc, 10, 3, (MuColor){64, 0, 0, 255});
+    check_pixel(&rc, 11, 3, BLACK);
+    check_pixel(&rc, 7, 1, BLACK);
+    check_pixel(&rc, 7, 6, BLACK);
+
+    mu_soft_render_shutdown(&rc);
+}
+
+/*
+ * Right triangle (0,0)-(8,0)-(0,8). The hypotenuse is the diagonal of pixel (3,4),
+ * so that pixel is half covered. A binary span would paint it solid or leave it empty.
+ */
+static void test_path_diagonal_coverage(void) {
+    CASE("path diagonal coverage");
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, 16, 16);
+    mu_soft_begin_frame(&rc, BLACK);
+
+    MuPath path;
+    mu_path_init(&path);
+    mu_path_move_to(&path, 0.f, 0.f);
+    mu_path_line_to(&path, 8.f, 0.f);
+    mu_path_line_to(&path, 0.f, 8.f);
+    mu_path_close(&path);
+
+    MuDrawPathOpts opts;
+    mu_draw_path_opts_init(&opts);
+    opts.fill = RED;
+    mu_draw_path(&rc, &path, &opts);
+
+    check_pixel(&rc, 1, 1, RED);
+    check_pixel(&rc, 3, 3, RED);
+    check_pixel(&rc, 3, 4, (MuColor){128, 0, 0, 255});
+    check_pixel(&rc, 4, 4, BLACK);
+
+    mu_soft_render_shutdown(&rc);
+}
+
+/* Geometric coverage scales the source alpha. Column 4 is 75% covered; 128 * 191/255 = 96. */
+static void test_path_coverage_scales_source_alpha(void) {
+    CASE("path coverage scales source alpha");
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, 24, 16);
+    mu_soft_begin_frame(&rc, BLACK);
+
+    MuPath path;
+    mu_path_init(&path);
+    mu_path_rect(&path, (MuRect){4.25f, 2.f, 6.f, 4.f});
+
+    MuDrawPathOpts opts;
+    mu_draw_path_opts_init(&opts);
+    opts.fill = (MuColor){255, 0, 0, 128};
+    mu_draw_path(&rc, &path, &opts);
+
+    check_pixel(&rc, 4, 3, (MuColor){96, 0, 0, 255});
+    check_pixel(&rc, 7, 3, (MuColor){128, 0, 0, 255});
+
+    mu_soft_render_shutdown(&rc);
+}
+
+/* Same-direction inner contour punches a hole. Winding 2 is empty under even-odd. */
+static void test_path_even_odd_hole(void) {
+    CASE("path even-odd hole");
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, 20, 20);
+    mu_soft_begin_frame(&rc, BLACK);
+
+    MuPath path;
+    mu_path_init(&path);
+    mu_path_rect(&path, (MuRect){2.f, 2.f, 12.f, 12.f});
+    mu_path_rect(&path, (MuRect){5.f, 5.f, 6.f, 6.f});
+
+    MuDrawPathOpts opts;
+    mu_draw_path_opts_init(&opts);
+    opts.fill = RED;
+    mu_draw_path(&rc, &path, &opts);
+
+    check_pixel(&rc, 3, 3, RED);
+    check_pixel(&rc, 8, 8, BLACK);
+    check_pixel(&rc, 5, 5, BLACK);
+    check_pixel(&rc, 1, 8, BLACK);
+    check_pixel(&rc, 2, 2, RED);
+
+    mu_soft_render_shutdown(&rc);
+}
+
+/* The edges lie outside the scissor. The interior must still fill, and not past the clip. */
+static void test_path_fill_inside_clip_with_outside_edges(void) {
+    CASE("path fill inside clip with outside edges");
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, 24, 24);
+    mu_soft_begin_frame(&rc, SENTINEL);
+
+    mu_push_scissor(&rc, (MuRect){6.f, 6.f, 8.f, 8.f});
+    MuPath path;
+    mu_path_init(&path);
+    mu_path_rect(&path, (MuRect){-40.f, -40.f, 100.f, 100.f});
+    MuDrawPathOpts opts;
+    mu_draw_path_opts_init(&opts);
+    opts.fill = RED;
+    mu_draw_path(&rc, &path, &opts);
+    mu_pop_scissor(&rc);
+
+    check_pixel(&rc, 8, 8, RED);
+    check_pixel(&rc, 6, 6, RED);
+    check_pixel(&rc, 13, 13, RED);
+    check_pixel(&rc, 5, 8, SENTINEL);
+    check_pixel(&rc, 14, 8, SENTINEL);
+    check_pixel(&rc, 8, 5, SENTINEL);
+    check_pixel(&rc, 8, 14, SENTINEL);
+
+    mu_soft_render_shutdown(&rc);
+}
+
+/* Line at y=8.2, width 1. Neighbouring rows are partial; two rows further are empty. */
+static void test_path_stroke_antialiases(void) {
+    CASE("path stroke antialiases");
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, 24, 16);
+    mu_soft_begin_frame(&rc, BLACK);
+
+    MuPath path;
+    mu_path_init(&path);
+    mu_path_move_to(&path, 1.f, 8.2f);
+    mu_path_line_to(&path, 20.f, 8.2f);
+
+    MuDrawPathOpts opts;
+    mu_draw_path_opts_init(&opts);
+    opts.stroke = RED;
+    opts.stroke_width = 1.f;
+    mu_draw_path(&rc, &path, &opts);
+
+    MuColor near = mu_soft_get_pixel(&rc, 10, 8);
+    MuColor far = mu_soft_get_pixel(&rc, 10, 7);
+    CHECK(near.r > 160 && near.r < 200);
+    CHECK(far.r > 50 && far.r < 100);
+    check_pixel(&rc, 10, 6, BLACK);
+    check_pixel(&rc, 10, 9, BLACK);
+
+    mu_soft_render_shutdown(&rc);
+}
+
+/*
+ * Joint of a right angle, width 4, alpha 128, over opaque black.
+ * Both segments cover the vertex fully. One composite is r=128; blending each
+ * segment in turn would land near r=192.
+ */
+static void test_path_stroke_join_composites_once(void) {
+    CASE("path stroke join composites once");
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, 24, 24);
+    mu_soft_begin_frame(&rc, BLACK);
+
+    MuPath path;
+    mu_path_init(&path);
+    mu_path_move_to(&path, 2.f, 10.5f);
+    mu_path_line_to(&path, 10.5f, 10.5f);
+    mu_path_line_to(&path, 10.5f, 20.f);
+
+    MuDrawPathOpts opts;
+    mu_draw_path_opts_init(&opts);
+    opts.stroke = (MuColor){255, 0, 0, 128};
+    opts.stroke_width = 4.f;
+    mu_draw_path(&rc, &path, &opts);
+
+    check_pixel(&rc, 10, 10, (MuColor){128, 0, 0, 255});
+    check_pixel(&rc, 4, 10, (MuColor){128, 0, 0, 255});
+
+    mu_soft_render_shutdown(&rc);
+}
+
+/* Scale 2 maps the logical rect (2,2,4,4) onto physical pixels [4,12). */
+static void test_path_scale_is_device_pixels(void) {
+    CASE("path scale is device pixels");
+    MuRenderContext rc;
+    mu_soft_render_init(&rc, 20, 20);
+    mu_soft_set_scale(&rc, 2.f);
+    mu_soft_begin_frame(&rc, BLACK);
+
+    MuPath path;
+    mu_path_init(&path);
+    mu_path_rect(&path, (MuRect){2.f, 2.f, 4.f, 4.f});
+
+    MuDrawPathOpts opts;
+    mu_draw_path_opts_init(&opts);
+    opts.fill = RED;
+    mu_draw_path(&rc, &path, &opts);
+
+    check_pixel(&rc, 4, 4, RED);
+    check_pixel(&rc, 11, 11, RED);
+    check_pixel(&rc, 3, 4, BLACK);
+    check_pixel(&rc, 12, 4, BLACK);
+    check_pixel(&rc, 4, 3, BLACK);
+
+    mu_soft_render_shutdown(&rc);
+}
+
 int main(void) {
     test_pack_roundtrip();
     test_opaque_fill_bounds();
@@ -515,6 +763,15 @@ int main(void) {
     test_scale_applies_to_scissor();
     test_path_filled_triangle();
     test_path_stroke();
+    test_path_rect_on_pixels_is_crisp();
+    test_path_subpixel_vertical_coverage();
+    test_path_diagonal_coverage();
+    test_path_coverage_scales_source_alpha();
+    test_path_even_odd_hole();
+    test_path_fill_inside_clip_with_outside_edges();
+    test_path_stroke_antialiases();
+    test_path_stroke_join_composites_once();
+    test_path_scale_is_device_pixels();
 
     if (g_failures) {
         printf("\n%d check(s) failed\n", g_failures);
