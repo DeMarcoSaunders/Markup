@@ -45,6 +45,10 @@ MuNode *mu_make_checkbox(MuContext *ctx, bool on, void (*on_toggle)(void *, bool
 MuNode *mu_make_dropdown(MuContext *ctx);
 void mu_dropdown_add_option(MuNode *dd, const char *item);
 MuNode *mu_make_textinput(MuContext *ctx, const char *initial);
+typedef void (*MuTextInputChangeFn)(void *user_data, MuNode *input, const char *utf8);
+/** Called once per content change, including set_text; cursor moves do not notify.
+ * utf8 is borrowed from the input and valid until its next edit or destruction. */
+void mu_textinput_set_on_change(MuNode *input, MuTextInputChangeFn callback, void *user_data);
 const char *mu_textinput_get_text(const MuNode *input);
 void mu_textinput_set_text(MuNode *input, const char *text);
 void mu_textinput_set_placeholder(MuNode *input, const char *placeholder);

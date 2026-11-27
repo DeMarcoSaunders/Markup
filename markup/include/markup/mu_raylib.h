@@ -49,6 +49,8 @@ struct MuRenderContext {
     Font font;
     bool font_loaded;
     int scissor_depth;
+    int scissor_overflow;
+    MuRect scissor_stack[32];
     MuRaylibFontSlot fonts[MU_FONT_MAX];
     int font_count;
     MuRaylibImageSlot images[MU_IMAGE_MAX];

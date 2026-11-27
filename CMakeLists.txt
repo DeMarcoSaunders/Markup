@@ -51,6 +51,7 @@ endif()
 add_library(markup_core STATIC
     markup/src/mu_core.c
     markup/src/mu_arena.c
+    markup/src/mu_input_seat.c
     markup/src/mu_spring.c
 )
 target_include_directories(markup_core PUBLIC
@@ -72,7 +73,7 @@ add_library(markup_style STATIC
     markup/src/mu_text.c
     markup/src/mu_text_layout.c
 )
-target_link_libraries(markup_style PUBLIC markup_core)
+target_link_libraries(markup_style PUBLIC markup_core markup_layout_flex)
 if(MSVC)
     # mu_text_layout.c calls snprintf. Consumers that also link raylib pull the UCRT shim in
     # transitively; standalone ones (the tests) do not, and fail with unresolved snprintf.
@@ -157,6 +158,11 @@ add_library(markup::compose ALIAS markup_compose)
 add_library(markup::paint ALIAS markup_paint)
 
 add_library(markup::core ALIAS markup_core)
+
+# Optional structural parsing: no widgets, layout, or renderer dependency.
+add_library(markup_document STATIC markup/src/mu_document.c)
+target_link_libraries(markup_document PUBLIC markup_core)
+add_library(markup::document ALIAS markup_document)
 add_library(markup::layout_flex ALIAS markup_layout_flex)
 add_library(markup::style ALIAS markup_style)
 add_library(markup::input ALIAS markup_input)
@@ -317,8 +323,38 @@ if(MARKUP_WITH_SKIA)
 endif()
 
 option(MARKUP_BUILD_TESTS "Build Markup test suite" ON)
+option(MARKUP_BUILD_EXAMPLES "Build four focused software-rendered examples" ON)
+if(MARKUP_BUILD_EXAMPLES)
+    add_library(markup_example_host STATIC examples/example_host.c)
+    target_link_libraries(markup_example_host PUBLIC markup_widgets_basic markup_input markup_soft)
+    target_compile_definitions(markup_example_host PRIVATE MARKUP_EXAMPLE_FONT="${MARKUP_DEMO_FONT_ABS}")
+    if(TARGET markup_sdl)
+        target_link_libraries(markup_example_host PRIVATE markup_sdl)
+        target_compile_definitions(markup_example_host PRIVATE MARKUP_EXAMPLE_SDL=1)
+    endif()
+    set(_markup_examples card form scroll_list theme)
+    foreach(_example IN LISTS _markup_examples)
+        add_executable(example_${_example} examples/${_example}.c)
+        target_link_libraries(example_${_example} PRIVATE markup_example_host)
+    endforeach()
+    target_link_libraries(example_card PRIVATE markup_document)
+    add_custom_target(markup_examples DEPENDS example_card example_form example_scroll_list example_theme)
+endif()
 if(MARKUP_BUILD_TESTS)
     enable_testing()
+    if(MARKUP_BUILD_EXAMPLES)
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/example-snapshots")
+        foreach(_example IN LISTS _markup_examples)
+            add_test(NAME example_${_example} COMMAND example_${_example} --snapshot
+                "${CMAKE_CURRENT_BINARY_DIR}/example-snapshots/${_example}.ppm")
+        endforeach()
+    endif()
+    add_executable(test_document tests/test_document.c)
+    target_link_libraries(test_document PRIVATE markup_document)
+    add_test(NAME document COMMAND test_document)
+    add_executable(test_foundations tests/test_foundations.c)
+    target_link_libraries(test_foundations PRIVATE markup_widgets_basic markup_input markup_soft)
+    add_test(NAME foundations COMMAND test_foundations)
     add_executable(test_raster tests/test_raster.c)
     target_link_libraries(test_raster PRIVATE markup_soft)
     add_test(NAME raster COMMAND test_raster)
@@ -438,6 +474,7 @@ set(MARKUP_EXPORTED_TARGETS
     markup_core markup_layout_flex markup_style markup_input markup_paint
     markup_soft markup_widgets_basic markup_compose markup_anim
     markup_physics markup_physics_node
+    markup_document
 )
 # NAMESPACE markup:: below prepends to each target's EXPORT_NAME, which defaults to the
 # target name -- so without this the installed package defined markup::markup_core rather

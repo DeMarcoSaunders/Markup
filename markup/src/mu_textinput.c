@@ -44,12 +44,34 @@ typedef struct MuTextInState {
     int cursor;
     float scroll_x;
     char placeholder[MU_TEXTINPUT_PLACEHOLDER_LEN];
+    MuTextInputChangeFn on_change;
+    void *user_data;
 } MuTextInState;
 
 const MuNodeOps mu_textinput_node_ops;
 
 static MuTextInState *textinput_state(MuNode *node) {
     return node ? (MuTextInState *)node->state : NULL;
+}
+
+void mu_textinput_set_on_change(MuNode *input, MuTextInputChangeFn cb, void *user) {
+    MuTextInState *s = textinput_state(input);
+    if (s) { s->on_change = cb; s->user_data = user; }
+}
+
+static void notify_change(MuNode *input) {
+    MuTextInState *s = textinput_state(input);
+    if (s && s->on_change) s->on_change(s->user_data, input, s->buf);
+}
+
+static void copy_utf8(char *dst, size_t cap, const char *src) {
+    size_t len = strlen(src);
+    if (len >= cap) {
+        len = cap - 1u;
+        while (len && ((unsigned char)src[len] & 0xC0u) == 0x80u) len--;
+    }
+    memmove(dst, src, len);
+    dst[len] = 0;
 }
 
 /* --- UTF-8 boundary helpers ------------------------------------------------------
@@ -242,7 +264,8 @@ static bool textinput_key(MuContext *ctx, MuNode *node, const void *evp) {
         MuStyleSnapshot st;
         mu_style_resolve(ctx, node, &st);
         textinput_sync_scroll(ctx, node, NULL, &st.text);
-        mu_layout_mark_dirty(node);
+        mu_node_mark_paint_dirty(node);
+        if (ev->key == MU_KEY_BACKSPACE || ev->key == MU_KEY_DELETE) notify_change(node);
     }
     return changed;
 }
@@ -293,7 +316,8 @@ static bool textinput_char(MuContext *ctx, MuNode *node, unsigned int cp) {
     MuStyleSnapshot st;
     mu_style_resolve(ctx, node, &st);
     textinput_sync_scroll(ctx, node, NULL, &st.text);
-    mu_layout_mark_dirty(node);
+    mu_node_mark_paint_dirty(node);
+    notify_change(node);
     return true;
 }
 
@@ -361,8 +385,9 @@ const MuNodeOps mu_textinput_node_ops = {
 void mu_textinput_insert_utf8(MuContext *ctx, MuNode *input, const char *utf8) {
     MuTextInState *s = textinput_state(input);
     if (!s || !utf8 || !utf8[0]) return;
-    int slen = (int)strlen(utf8);
-    if (slen <= 0 || s->len + slen >= MU_TEXTINPUT_CAP - 1) return;
+    size_t bytes = strlen(utf8);
+    if (bytes >= (size_t)(MU_TEXTINPUT_CAP - s->len)) return;
+    int slen = (int)bytes;
     textinput_clamp_cursor(s);
     memmove(&s->buf[s->cursor + slen], &s->buf[s->cursor], (size_t)(s->len - s->cursor + 1));
     memcpy(&s->buf[s->cursor], utf8, (size_t)slen);
@@ -374,7 +399,8 @@ void mu_textinput_insert_utf8(MuContext *ctx, MuNode *input, const char *utf8) {
         mu_style_resolve(ctx, input, &st);
         textinput_sync_scroll(ctx, input, NULL, &st.text);
     }
-    mu_layout_mark_dirty(input);
+    mu_node_mark_paint_dirty(input);
+    notify_change(input);
 }
 
 const char *mu_textinput_get_text(const MuNode *input) {
@@ -386,21 +412,23 @@ void mu_textinput_set_text(MuNode *input, const char *text) {
     MuTextInState *s = textinput_state(input);
     if (!s) return;
     const char *src = text ? text : "";
-    strncpy(s->buf, src, MU_TEXTINPUT_CAP - 1);
-    s->buf[MU_TEXTINPUT_CAP - 1] = '\0';
+    char next[MU_TEXTINPUT_CAP];
+    copy_utf8(next, sizeof(next), src);
+    if (strcmp(next, s->buf) == 0) return;
+    memcpy(s->buf, next, strlen(next) + 1u);
     s->len = (int)strlen(s->buf);
     s->cursor = s->len;
     s->scroll_x = 0.f;
-    mu_layout_mark_dirty(input);
+    mu_node_mark_paint_dirty(input);
+    notify_change(input);
 }
 
 void mu_textinput_set_placeholder(MuNode *input, const char *placeholder) {
     MuTextInState *s = textinput_state(input);
     if (!s) return;
     const char *src = placeholder ? placeholder : "";
-    strncpy(s->placeholder, src, MU_TEXTINPUT_PLACEHOLDER_LEN - 1);
-    s->placeholder[MU_TEXTINPUT_PLACEHOLDER_LEN - 1] = '\0';
-    mu_layout_mark_dirty(input);
+    copy_utf8(s->placeholder, sizeof(s->placeholder), src);
+    mu_node_mark_paint_dirty(input);
 }
 
 MuNode *mu_make_textinput(MuContext *ctx, const char *initial) {
@@ -412,7 +440,7 @@ MuNode *mu_make_textinput(MuContext *ctx, const char *initial) {
     if (!s) return NULL;
     strncpy(s->placeholder, "Type here…", sizeof(s->placeholder) - 1);
     if (initial) {
-        strncpy(s->buf, initial, MU_TEXTINPUT_CAP - 1);
+        copy_utf8(s->buf, sizeof(s->buf), initial);
         s->len = (int)strlen(s->buf);
         s->cursor = s->len;
     }

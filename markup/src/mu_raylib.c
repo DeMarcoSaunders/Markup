@@ -270,16 +270,37 @@ const void *mu_present_pixel_data(MuRenderContext *rc, int *out_w, int *out_h, i
     return NULL;
 }
 
+static void apply_scissor(MuRect r) {
+    int x = (int)floorf(r.x), y = (int)floorf(r.y);
+    int w = (int)ceilf(r.x + r.w) - x, h = (int)ceilf(r.y + r.h) - y;
+    BeginScissorMode(x, y, w > 0 ? w : 0, h > 0 ? h : 0);
+}
+
 void mu_push_scissor(MuRenderContext *rc, MuRect r) {
-    if (rc->scissor_depth >= 32) return;
-    BeginScissorMode((int)r.x, (int)r.y, (int)r.w, (int)r.h);
-    rc->scissor_depth++;
+    if (!rc) return;
+    if (rc->scissor_depth >= 32) {
+        rc->scissor_overflow++;
+        BeginScissorMode(0,0,0,0);
+        return;
+    }
+    if (rc->scissor_depth) {
+        MuRect parent=rc->scissor_stack[rc->scissor_depth-1];
+        float right=fminf(r.x+r.w,parent.x+parent.w), bottom=fminf(r.y+r.h,parent.y+parent.h);
+        r.x=fmaxf(r.x,parent.x); r.y=fmaxf(r.y,parent.y);
+        r.w=fmaxf(0,right-r.x); r.h=fmaxf(0,bottom-r.y);
+    }
+    rc->scissor_stack[rc->scissor_depth++]=r;
+    apply_scissor(r);
 }
 
 void mu_pop_scissor(MuRenderContext *rc) {
-    if (rc->scissor_depth <= 0) return;
-    EndScissorMode();
-    rc->scissor_depth--;
+    if (!rc) return;
+    if (rc->scissor_overflow) {
+        if (--rc->scissor_overflow) return;
+    } else if (rc->scissor_depth) rc->scissor_depth--;
+    else return;
+    if (rc->scissor_depth) apply_scissor(rc->scissor_stack[rc->scissor_depth-1]);
+    else EndScissorMode();
 }
 
 static void draw_rounded_rect(float x, float y, float w, float h, float radius_px, Color col) {

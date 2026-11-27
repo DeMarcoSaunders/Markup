@@ -1,5 +1,6 @@
 #include "../include/markup/mu_style.h"
 #include "../include/markup/mu_text.h"
+#include "../include/markup/mu_layout_flex.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -52,14 +53,16 @@ static void default_theme(MuStyleModule *m) {
 
 void mu_style_init(MuContext *ctx, const MuStyleModule *initial) {
     if (!ctx) return;
-    mu_style_shutdown(ctx);
     MuStyleModule *m = (MuStyleModule *)malloc(sizeof(MuStyleModule));
-    if (!m) return;
+    if (!m) { mu_error_set(ctx, MU_ERR_NOMEM, "theme allocation"); return; }
     if (initial)
         *m = *initial;
     else
         default_theme(m);
+    mu_style_shutdown(ctx);
     ctx->style = m;
+    mu_layout_invalidate_all(ctx);
+    mu_damage_all(ctx);
 }
 
 void mu_style_shutdown(MuContext *ctx) {

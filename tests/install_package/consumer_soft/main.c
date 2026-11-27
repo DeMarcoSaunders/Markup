@@ -18,6 +18,7 @@
 #include "markup/mu_anim.h"
 #include "markup/mu_compose.h"
 #include "markup/mu_core.h"
+#include "markup/mu_document.h"
 #include "markup/mu_input.h"
 #include "markup/mu_layout_flex.h"
 #include "markup/mu_physics_node.h"
@@ -40,6 +41,11 @@ int main(void) {
 
     /* core + style + soft */
     mu_context_init(&ctx, 1 << 16);
+    if (!mu_context_enable_node_arena(&ctx)) return 1;
+    MuDiagnostic diagnostic;
+    MuDocument *document = mu_document_parse(mu_slice_from_cstr("<card/>"), 0, &diagnostic);
+    if (!document) return 1;
+    mu_document_destroy(document);
     mu_style_init(&ctx, NULL);
     mu_soft_render_init(&rc, W, H);
     mu_render_bind_measure(&rc);
@@ -51,6 +57,7 @@ int main(void) {
     mu_node_set_bounds(root, (MuRect){0, 0, W, H});
     mu_context_set_root(&ctx, root);
     MuNode *button = mu_make_button(&ctx, "Hi", NULL, NULL);
+    if (mu_context_resolve_handle(&ctx, mu_node_handle(button)) != button) return 1;
     mu_node_add_child(&ctx, root, button);
 
     /* compose */

@@ -1028,8 +1028,10 @@ void mu_label_set_text(MuNode *label, const char *text) {
     if (!label) return;
     MuLabelState *s = (MuLabelState *)label->state;
     if (!s) return;
-    char *next = dup_cstr(text);
-    if (!next) return;
+    const char *src = text ? text : "";
+    if (s->text && strcmp(s->text, src) == 0) return;
+    char *next = dup_cstr(src);
+    if (!next) { mu_error_set(label->context, MU_ERR_NOMEM, "label text allocation"); return; }
     free(s->text);
     s->text = next;
     mu_layout_mark_dirty(label);

@@ -27,6 +27,7 @@ target_link_libraries(consumer_soft PRIVATE
     markup::physics
     markup::physics_node
     markup::core
+    markup::document
 )
 
 # One predictable path for the driver to run, under single- and multi-config generators

@@ -14,6 +14,13 @@ extern "C" {
 typedef struct MuContext MuContext;
 typedef struct MuNode MuNode;
 
+/* Context-scoped, checked in O(1). Zero is invalid. Stale handles never resolve
+ * after a node is destroyed or a tree is cleared; do not use after context shutdown. */
+typedef struct MuNodeHandle {
+    MuContext *context;
+    uint32_t slot, generation;
+} MuNodeHandle;
+
 typedef struct MuVec2 {
     float x, y;
 } MuVec2;
@@ -113,6 +120,9 @@ MuArena *mu_arena_create(size_t capacity);
 void mu_arena_destroy(MuArena *a);
 void mu_arena_reset(MuArena *a);
 void *mu_arena_alloc(MuArena *a, size_t size, size_t align);
+size_t mu_arena_used(const MuArena *a);
+/** Restore a previously observed used count; never moves the arena forward. */
+void mu_arena_rewind(MuArena *a, size_t mark);
 
 typedef struct MuRenderContext MuRenderContext;
 typedef struct MuStyleModule MuStyleModule;
@@ -139,9 +149,14 @@ typedef struct MuNodeOps {
      * the app gave none, in which case motion should land at once (mu_spring_follow does).
      */
     bool (*animate)(MuContext *ctx, MuNode *node, float dt);
+    /** Optional viewport for children only; the tree balances this clip before overlays.
+     * Input uses the same rectangle. The default is the node's bounds when clipping. */
+    MuRect (*children_clip)(MuContext *ctx, MuNode *node);
 } MuNodeOps;
 
 struct MuNode {
+    MuContext *context;
+    MuNodeHandle handle;
     uint32_t id;
     uint32_t kind;
     MuNode *parent;
@@ -178,6 +193,12 @@ struct MuNode {
     MuRect prev_paint_bounds; /* includes the shadow; prev_bounds remains the backdrop box */
     uint32_t prev_flags;
     uint8_t cursor; /* MuCursor */
+    bool arena_owned;
+    /* Layout caches are private to markup_layout_flex. */
+    uint64_t layout_revision, measured_revision, measured_epoch, laid_out_epoch;
+    MuVec2 measured_available, measured_size;
+    MuRect laid_out_bounds;
+    bool measure_valid, layout_valid;
 };
 
 #define MU_NODE_VISIBLE (1u << 0)
@@ -234,6 +255,12 @@ struct MuContext {
     uint32_t next_node_id;
     MuArena *arena;
     MuArena *scratch; /* per-frame bump */
+    bool arena_nodes; /* opt-in: node/child storage uses arena, never scratch */
+    void *node_slots; /* private generational handle registry */
+    uint32_t node_slot_count, node_slot_cap, node_free_slot;
+    uint64_t layout_epoch;
+    struct { uint64_t measures, measure_hits, layouts; } layout_stats;
+    bool layout_failed;
 
     const MuNodeOps **kind_ops;
     const char **kind_names;
@@ -286,6 +313,14 @@ struct MuContext {
 
 void mu_context_init(MuContext *ctx, size_t arena_capacity);
 void mu_context_shutdown(MuContext *ctx);
+/** Call before creating any nodes. Uses the persistent arena sized by context_init.
+ * Widget state retains its existing ownership/destructors. Returns false if too late. */
+bool mu_context_enable_node_arena(MuContext *ctx);
+/** Destroy all nodes (including detached ones), clear input IDs and layers, then reset
+ * node storage. Kinds, theme, and seat callbacks survive. Never reset ctx->arena yourself. */
+void mu_context_clear_nodes(MuContext *ctx);
+MuNodeHandle mu_node_handle(const MuNode *node);
+MuNode *mu_context_resolve_handle(MuContext *ctx, MuNodeHandle handle);
 
 uint32_t mu_register_node_kind(MuContext *ctx, const char *name, const MuNodeOps *ops);
 const MuNodeOps *mu_get_node_ops(MuContext *ctx, uint32_t kind);

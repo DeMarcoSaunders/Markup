@@ -55,7 +55,37 @@ void mu_layout_mark_dirty(MuNode *node) {
      * to remember. Ancestors get only the layout bit — damaging their bounds too would
      * escalate every small change to the whole window. */
     if (node) node->flags |= MU_NODE_PAINT_DIRTY;
-    for (MuNode *n = node; n; n = n->parent) n->flags |= MU_NODE_LAYOUT_DIRTY;
+    for (MuNode *n = node; n; n = n->parent) {
+        n->flags |= MU_NODE_LAYOUT_DIRTY;
+        n->layout_revision++;
+        n->measure_valid = false;
+    }
+}
+
+void mu_layout_invalidate_all(MuContext *ctx) {
+    if (!ctx) return;
+    ctx->layout_epoch++;
+    if (ctx->root) mu_layout_mark_dirty(ctx->root);
+    if (ctx->popup_layer) mu_layout_mark_dirty(ctx->popup_layer);
+    if (ctx->modal_layer) mu_layout_mark_dirty(ctx->modal_layer);
+}
+
+void mu_node_set_visible(MuNode *node, bool visible) {
+    if (!node || !!(node->flags & MU_NODE_VISIBLE) == visible) return;
+    if (visible) node->flags |= MU_NODE_VISIBLE; else node->flags &= ~MU_NODE_VISIBLE;
+    mu_layout_mark_dirty(node);
+}
+
+void mu_node_set_overflow(MuNode *node, MuOverflow overflow) {
+    if (!node) return;
+    uint32_t before = node->flags;
+    if (overflow == MU_OVERFLOW_HIDDEN) node->flags |= MU_NODE_CLIP_CHILDREN;
+    else node->flags &= ~MU_NODE_CLIP_CHILDREN;
+    if (before != node->flags) {
+        /* Clipping can expose descendants beyond this node's own footprint. */
+        mu_damage_all(node->context);
+        mu_layout_mark_dirty(node);
+    }
 }
 
 static bool rect_equal(MuRect a, MuRect b) {
@@ -72,6 +102,7 @@ bool mu_node_set_bounds(MuNode *node, MuRect bounds) {
 
 void mu_layout_set_padding(MuNode *node, float top, float right, float bottom, float left) {
     if (!node) return;
+    if (node->layout.padding_top == top && node->layout.padding_right == right && node->layout.padding_bottom == bottom && node->layout.padding_left == left) return;
     node->layout.padding_top = top;
     node->layout.padding_right = right;
     node->layout.padding_bottom = bottom;
@@ -85,6 +116,7 @@ void mu_layout_set_padding_all(MuNode *node, float value) {
 
 void mu_layout_set_margin(MuNode *node, float top, float right, float bottom, float left) {
     if (!node) return;
+    if (node->layout.margin_top == top && node->layout.margin_right == right && node->layout.margin_bottom == bottom && node->layout.margin_left == left) return;
     node->layout.margin_top = top;
     node->layout.margin_right = right;
     node->layout.margin_bottom = bottom;
@@ -94,36 +126,42 @@ void mu_layout_set_margin(MuNode *node, float top, float right, float bottom, fl
 
 void mu_layout_set_gap(MuNode *node, float gap) {
     if (!node) return;
+    if (node->layout.gap == gap) return;
     node->layout.gap = gap;
     mu_layout_mark_dirty(node);
 }
 
 void mu_layout_set_flex_direction(MuNode *node, MuFlexDirection dir) {
     if (!node) return;
+    if (node->layout.flex_direction == dir) return;
     node->layout.flex_direction = dir;
     mu_layout_mark_dirty(node);
 }
 
 void mu_layout_set_justify(MuNode *node, MuFlexJustify justify) {
     if (!node) return;
+    if (node->layout.justify_content == justify) return;
     node->layout.justify_content = justify;
     mu_layout_mark_dirty(node);
 }
 
 void mu_layout_set_align_items(MuNode *node, MuFlexAlign align) {
     if (!node) return;
+    if (node->layout.align_items == align) return;
     node->layout.align_items = align;
     mu_layout_mark_dirty(node);
 }
 
 void mu_layout_set_align_self(MuNode *node, MuAlignSelf align) {
     if (!node) return;
+    if (node->layout.align_self == align) return;
     node->layout.align_self = align;
     mu_layout_mark_dirty(node);
 }
 
 void mu_layout_set_flex(MuNode *node, float grow, float shrink, float basis) {
     if (!node) return;
+    if (node->layout.flex_grow == grow && node->layout.flex_shrink == shrink && node->layout.flex_basis == basis) return;
     node->layout.flex_grow = grow;
     node->layout.flex_shrink = shrink;
     node->layout.flex_basis = basis;
@@ -132,6 +170,7 @@ void mu_layout_set_flex(MuNode *node, float grow, float shrink, float basis) {
 
 void mu_layout_set_min_size(MuNode *node, float min_w, float min_h) {
     if (!node) return;
+    if (node->layout.min_width == min_w && node->layout.min_height == min_h) return;
     node->layout.min_width = min_w;
     node->layout.min_height = min_h;
     mu_layout_mark_dirty(node);
@@ -139,6 +178,7 @@ void mu_layout_set_min_size(MuNode *node, float min_w, float min_h) {
 
 void mu_layout_set_max_size(MuNode *node, float max_w, float max_h) {
     if (!node) return;
+    if (node->layout.max_width == max_w && node->layout.max_height == max_h) return;
     node->layout.max_width = max_w;
     node->layout.max_height = max_h;
     mu_layout_mark_dirty(node);
@@ -146,6 +186,7 @@ void mu_layout_set_max_size(MuNode *node, float max_w, float max_h) {
 
 void mu_layout_set_flex_wrap(MuNode *node, bool wrap) {
     if (!node) return;
+    if (node->layout.flex_wrap == (wrap ? 1 : 0)) return;
     node->layout.flex_wrap = wrap ? 1 : 0;
     mu_layout_mark_dirty(node);
 }
@@ -220,7 +261,20 @@ static MuFlexAlign resolve_align_self(const MuLayoutStyle *child, const MuLayout
 static MuVec2 measure_node(MuContext *ctx, MuNode *node, MuVec2 avail) {
     const MuNodeOps *ops = mu_get_node_ops(ctx, node->kind);
     MuVec2 d = {0, 0};
-    if (ops && ops->measure) ops->measure(ctx, node, avail, &d);
+    if (node->measure_valid && node->measured_revision == node->layout_revision &&
+        node->measured_epoch == ctx->layout_epoch &&
+        node->measured_available.x == avail.x && node->measured_available.y == avail.y) {
+        d = node->measured_size;
+        ctx->layout_stats.measure_hits++;
+    } else {
+        if (ops && ops->measure) ops->measure(ctx, node, avail, &d);
+        ctx->layout_stats.measures++;
+        node->measured_available = avail;
+        node->measured_size = d;
+        node->measured_revision = node->layout_revision;
+        node->measured_epoch = ctx->layout_epoch;
+        node->measure_valid = !ctx->layout_failed;
+    }
     clamp_vec(&d, &node->layout);
 
     if (node->parent && (node->parent->flags & MU_NODE_FLEX_CONTAINER)) {
@@ -243,17 +297,26 @@ static MuRect inner_content(MuRect bounds, const MuLayoutStyle *ls) {
 }
 
 static void layout_subtree(MuContext *ctx, MuNode *node) {
+    if (node->layout_valid && !(node->flags & MU_NODE_LAYOUT_DIRTY) &&
+        node->laid_out_epoch == ctx->layout_epoch && rect_equal(node->bounds, node->laid_out_bounds)) return;
+    size_t scratch_mark = mu_arena_used(ctx->scratch);
+    ctx->layout_stats.layouts++;
     const MuNodeOps *ops = mu_get_node_ops(ctx, node->kind);
     if (ops && ops->layout_children)
         ops->layout_children(ctx, node);
     else if (node->flags & MU_NODE_FLEX_CONTAINER)
         mu_layout_flex_run(ctx, node);
-    node->flags &= ~MU_NODE_LAYOUT_DIRTY;
+    if (!ctx->layout_failed) {
+        node->flags &= ~MU_NODE_LAYOUT_DIRTY;
+        node->laid_out_bounds = node->bounds;
+        node->laid_out_epoch = ctx->layout_epoch;
+        node->layout_valid = true;
+    }
+    mu_arena_rewind(ctx->scratch, scratch_mark);
 }
 
 void mu_layout_node(MuContext *ctx, MuNode *node) {
     if (!ctx || !node) return;
-    if (!(node->flags & MU_NODE_LAYOUT_DIRTY)) return;
     layout_subtree(ctx, node);
 }
 
@@ -390,14 +453,18 @@ void mu_layout_flex_run(MuContext *ctx, MuNode *container) {
 
     int n = container->child_count;
     if (n <= 0) return;
-    if (!ctx->scratch) return;
+    if (!ctx->scratch) { ctx->layout_failed = true; mu_error_set(ctx, MU_ERR_NOMEM, "layout scratch"); return; }
 
     MuVec2 *sizes =
         (MuVec2 *)mu_arena_alloc(ctx->scratch, sizeof(MuVec2) * (size_t)n, _Alignof(MuVec2));
     float *grow = (float *)mu_arena_alloc(ctx->scratch, sizeof(float) * (size_t)n, _Alignof(float));
     float *shrink = (float *)mu_arena_alloc(ctx->scratch, sizeof(float) * (size_t)n, _Alignof(float));
     int *visible = (int *)mu_arena_alloc(ctx->scratch, sizeof(int) * (size_t)n, _Alignof(int));
-    if (!sizes || !grow || !shrink || !visible) return;
+    if (!sizes || !grow || !shrink || !visible) {
+        ctx->layout_failed = true;
+        mu_error_set(ctx, MU_ERR_NOMEM, "layout scratch exhausted");
+        return;
+    }
 
     MuVec2 avail = {inner.w, inner.h};
 
@@ -593,5 +660,7 @@ void mu_layout_flex_run(MuContext *ctx, MuNode *container) {
 
 void mu_layout_run(MuContext *ctx) {
     if (!ctx || !ctx->root) return;
+    ctx->layout_failed = false;
+    ctx->layout_stats.measures = ctx->layout_stats.measure_hits = ctx->layout_stats.layouts = 0;
     mu_layout_node(ctx, ctx->root);
 }

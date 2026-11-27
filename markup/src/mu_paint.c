@@ -517,8 +517,11 @@ static void paint_tree_clipped(MuContext *ctx, MuRenderContext *rc, MuNode *node
         if (node->flags & MU_NODE_CLIP_CHILDREN) mu_push_scissor(rc, node->bounds);
         if (self_visible && ops && ops->paint) ops->paint(ctx, node, rc);
 
+        bool child_clip = ops && ops->children_clip;
+        if (child_clip) mu_push_scissor(rc, ops->children_clip(ctx, node));
         for (int i = 0; i < node->child_count; i++)
             paint_tree_clipped(ctx, rc, node->children[i], area, off);
+        if (child_clip) mu_pop_scissor(rc);
 
         if (self_visible && ops && ops->paint_overlay) ops->paint_overlay(ctx, node, rc);
         if (node->flags & MU_NODE_CLIP_CHILDREN) mu_pop_scissor(rc);
@@ -541,7 +544,10 @@ static void paint_tree_offset(MuContext *ctx, MuRenderContext *rc, MuNode *node,
     const MuNodeOps *ops = mu_get_node_ops(ctx, node->kind);
     if (ops && ops->paint) ops->paint(ctx, node, rc);
 
+    bool child_clip = ops && ops->children_clip;
+    if (child_clip) mu_push_scissor(rc, ops->children_clip(ctx, node));
     for (int i = 0; i < node->child_count; i++) paint_tree_offset(ctx, rc, node->children[i], off);
+    if (child_clip) mu_pop_scissor(rc);
 
     if (ops && ops->paint_overlay) ops->paint_overlay(ctx, node, rc);
 

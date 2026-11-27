@@ -33,13 +33,19 @@ void mu_arena_reset(MuArena *a) {
 }
 
 void *mu_arena_alloc(MuArena *a, size_t size, size_t align) {
-    if (!a || !size) return NULL;
+    if (!a || !size || !align || (align & (align - 1u))) return NULL;
     uintptr_t p = (uintptr_t)(void *)a->base + a->used;
+    if (p > UINTPTR_MAX - (align - 1u)) return NULL;
     uintptr_t aligned = (p + (uintptr_t)(align - 1)) & ~((uintptr_t)(align - 1));
     size_t offset = (size_t)(aligned - (uintptr_t)(void *)a->base);
-    if (offset + size > a->size) return NULL;
+    if (offset > a->size || size > a->size - offset) return NULL;
     void *ptr = a->base + offset;
     a->used = offset + size;
     memset(ptr, 0, size);
     return ptr;
+}
+
+size_t mu_arena_used(const MuArena *a) { return a ? a->used : 0; }
+void mu_arena_rewind(MuArena *a, size_t mark) {
+    if (a && mark <= a->used) a->used = mark;
 }

@@ -22,10 +22,10 @@ typedef struct MuPhysicsNodeState {
     void *user;
 } MuPhysicsNodeState;
 
-static uint32_t physics_kind_id;
+static const MuNodeOps physics_ops;
 
 static MuPhysicsNodeState *state_of(MuNode *node) {
-    if (!node || !physics_kind_id || node->kind != physics_kind_id) return NULL;
+    if (!node || mu_get_node_ops(node->context, node->kind) != &physics_ops) return NULL;
     return (MuPhysicsNodeState *)node->state;
 }
 
@@ -69,16 +69,18 @@ static const MuNodeOps physics_ops = {
 };
 
 void mu_physics_register(MuContext *ctx) {
-    if (!physics_kind_id) physics_kind_id = mu_register_node_kind(ctx, "physics_world", &physics_ops);
+    if (ctx && !mu_kind_physics_world(ctx)) mu_register_node_kind(ctx, "physics_world", &physics_ops);
 }
 
 uint32_t mu_kind_physics_world(const MuContext *ctx) {
-    (void)ctx;
-    return physics_kind_id;
+    if (ctx) for (int i=0; i<ctx->kind_count; i++)
+        if (ctx->kind_ops[i] == &physics_ops) return (uint32_t)i+1u;
+    return 0;
 }
 
 MuNode *mu_make_physics_world(MuContext *ctx, const MuPhysConfig *cfg) {
-    if (!ctx || !physics_kind_id) return NULL;
+    uint32_t kind = mu_kind_physics_world(ctx);
+    if (!kind) return NULL;
 
     MuPhysConfig defaults;
     if (!cfg) {
@@ -99,7 +101,7 @@ MuNode *mu_make_physics_world(MuContext *ctx, const MuPhysConfig *cfg) {
     s->fixed_dt = 1.f / 120.f;
     s->max_advance = 0.25f;
 
-    MuNode *node = mu_node_create(ctx, physics_kind_id, s);
+    MuNode *node = mu_node_create(ctx, kind, s);
     if (!node) {
         mu_phys_destroy(s->world);
         free(s);

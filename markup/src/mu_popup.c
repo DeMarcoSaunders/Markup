@@ -36,7 +36,7 @@ typedef struct MuPopupState {
     MuNode *content;
 } MuPopupState;
 
-static uint32_t popup_kind_id = 0;
+static const MuNodeOps popup_node_ops;
 
 static bool pt_in_rect(MuVec2 p, MuRect r) {
     return p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h;
@@ -129,13 +129,13 @@ static MuNode *popup_create_content(MuContext *ctx) {
 }
 
 void mu_popup_register(MuContext *ctx) {
-    (void)ctx;
-    if (!popup_kind_id) popup_kind_id = mu_register_node_kind(ctx, "popup", &popup_node_ops);
+    if (ctx && !mu_kind_popup(ctx)) mu_register_node_kind(ctx, "popup", &popup_node_ops);
 }
 
 uint32_t mu_kind_popup(const MuContext *ctx) {
-    (void)ctx;
-    return popup_kind_id;
+    if (ctx) for (int i=0; i<ctx->kind_count; i++)
+        if (ctx->kind_ops[i] == &popup_node_ops) return (uint32_t)i+1u;
+    return 0;
 }
 
 MuNode *mu_make_popup_layer(MuContext *ctx) {
@@ -154,13 +154,14 @@ void mu_popup_bind_layer(MuContext *ctx, MuNode *layer) {
 }
 
 MuNode *mu_make_popup(MuContext *ctx) {
-    if (!ctx || !popup_kind_id) return NULL;
+    uint32_t kind = mu_kind_popup(ctx);
+    if (!kind) return NULL;
 
     MuPopupState *s = (MuPopupState *)calloc(1, sizeof(MuPopupState));
     if (!s) return NULL;
     s->placement = MU_POPUP_BELOW;
 
-    MuNode *popup = mu_node_create(ctx, popup_kind_id, s);
+    MuNode *popup = mu_node_create(ctx, kind, s);
     if (!popup) {
         free(s);
         return NULL;

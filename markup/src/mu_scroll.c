@@ -413,7 +413,7 @@ static void scroll_paint(MuContext *ctx, MuNode *node, MuRenderContext *rc) {
     if (st.border.a > 0 && st.border_width > 0.f)
         mu_draw_rect(rc, g.view, (MuColor){0, 0, 0, 0}, st.border, st.border_width, rad);
 
-    if (g.view.w > 0.f && g.view.h > 0.f) mu_push_scissor(rc, g.view);
+
 }
 
 /*
@@ -447,9 +447,6 @@ static void scroll_paint_overlay(MuContext *ctx, MuNode *node, MuRenderContext *
     MuScrollState *s = scroll_state(node);
     MuScrollBarGeom g = scroll_bar_geom(node, s);
 
-    /* Content clip from scroll_paint must be off before drawing gutter bars. */
-    if (g.view.w > 0.f && g.view.h > 0.f) mu_pop_scissor(rc);
-
     if (!g.show_v && !g.show_h) return;
 
     const MuStyleModule *theme = ctx ? ctx->style : NULL;
@@ -479,6 +476,11 @@ static bool scroll_hit(MuContext *ctx, MuNode *node, MuVec2 pt) {
     return pt.x >= g.view.x && pt.x < g.view.x + g.view.w && pt.y >= g.view.y && pt.y < g.view.y + g.view.h;
 }
 
+static MuRect scroll_children_clip(MuContext *ctx, MuNode *node) {
+    (void)ctx;
+    return scroll_bar_geom(node, scroll_state(node)).view;
+}
+
 const MuNodeOps mu_scroll_node_ops = {
     .destroy_state = scroll_destroy,
     .measure = scroll_measure,
@@ -490,6 +492,7 @@ const MuNodeOps mu_scroll_node_ops = {
     .on_key = NULL,
     .on_char = NULL,
     .animate = scroll_animate,
+    .children_clip = scroll_children_clip,
 };
 
 static MuNode *scroll_create_content(MuContext *ctx) {

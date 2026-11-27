@@ -1,41 +1,11 @@
-#include "../include/markup/mu_input.h"
+#include "mu_input_internal.h"
 #include <stdlib.h>
 #include <string.h>
 
 extern void mu_widgets_dispatch_wheel(MuContext *ctx, MuVec2 position, float delta_x, float delta_y);
 
-typedef struct MuInputSeat {
-    MuSeatWheelFn wheel;
-    void *wheel_user;
-    MuSeatKeyFn key;
-    void *key_user;
-    MuSeatTouchFn touch;
-    void *touch_user;
-    MuPresentedFn on_presented;
-    void *on_presented_user;
-    MuClipboardBridge clipboard;
-    MuImeCallbacks ime;
-    MuRect page_ime_caret;
-    bool page_ime_caret_valid;
-    MuMarkupImeCaretFn markup_caret;
-    void *markup_caret_user;
-    char clipboard_buf[4096];
-} MuInputSeat;
-
 static MuInputSeat *seat_of(MuContext *ctx) {
     return ctx ? (MuInputSeat *)ctx->input_seat : NULL;
-}
-
-void mu_input_context_init(MuContext *ctx) {
-    if (!ctx || ctx->input_seat) return;
-    MuInputSeat *s = (MuInputSeat *)calloc(1, sizeof(MuInputSeat));
-    ctx->input_seat = s;
-}
-
-void mu_input_context_shutdown(MuContext *ctx) {
-    if (!ctx) return;
-    free(ctx->input_seat);
-    ctx->input_seat = NULL;
 }
 
 static uint32_t key_modifiers(const MuKeyEvent *ev, MuContext *ctx) {
@@ -89,14 +59,17 @@ static bool pt_in(MuVec2 p, MuRect r) {
 static MuNode *hit_dfs(MuContext *ctx, MuNode *n, MuVec2 pt) {
     if (!n || !(n->flags & MU_NODE_VISIBLE) || (n->flags & MU_NODE_DISABLED)) return NULL;
 
-    for (int i = n->child_count - 1; i >= 0; i--) {
+    if ((n->flags & MU_NODE_CLIP_CHILDREN) && !pt_in(pt, n->bounds)) return NULL;
+    const MuNodeOps *ops = mu_get_node_ops(ctx, n->kind);
+    bool inside_children = !ops || !ops->children_clip || pt_in(pt, ops->children_clip(ctx, n));
+    if (inside_children) for (int i = n->child_count - 1; i >= 0; i--) {
         MuNode *h = hit_dfs(ctx, n->children[i], pt);
         if (h) return h;
     }
 
     if (n->flags & MU_NODE_HIT_TRANSPARENT) return NULL;
 
-    const MuNodeOps *ops = mu_get_node_ops(ctx, n->kind);
+
     if (ops && ops->hit_test) {
         if (!ops->hit_test(ctx, n, pt)) return NULL;
     } else {
@@ -221,12 +194,6 @@ void mu_input_set_ime_caret_rect(MuContext *ctx, MuRect rect) {
     s->page_ime_caret_valid = true;
 }
 
-void mu_input_reset_page_ime_caret(MuContext *ctx) {
-    MuInputSeat *s = seat_of(ctx);
-    if (!s) return;
-    s->page_ime_caret_valid = false;
-}
-
 void mu_input_set_markup_ime_caret(MuContext *ctx, MuMarkupImeCaretFn fn, void *user) {
     MuInputSeat *s = seat_of(ctx);
     if (!ctx || !s) return;
@@ -259,7 +226,8 @@ void mu_input_update_hover(MuContext *ctx, MuVec2 mouse) {
 
 void mu_input_dispatch_pointer(MuContext *ctx, const MuPointerEvent *ev) {
     if (!ctx || !ev) return;
-    static uint32_t pressed_target_id = 0;
+    MuInputSeat *seat = seat_of(ctx);
+    if (!seat) return;
 
     MuPointerEvent pe = *ev;
     if (!pe.modifiers) pe.modifiers = ctx->seat_modifiers;
@@ -278,7 +246,7 @@ void mu_input_dispatch_pointer(MuContext *ctx, const MuPointerEvent *ev) {
     if (pe.drag) return;
 
     if (pe.pressed) {
-        pressed_target_id = under ? under->id : 0;
+        seat->pressed_target_id = under ? under->id : 0;
         if (under) {
             under->flags |= MU_NODE_PRESSED;
             if (under->flags & MU_NODE_FOCUSABLE) mu_focus_set(ctx, under->id);
@@ -287,13 +255,13 @@ void mu_input_dispatch_pointer(MuContext *ctx, const MuPointerEvent *ev) {
         }
     } else if (pe.released) {
         MuNode *target = under;
-        if (!target && pressed_target_id) target = mu_context_find_id(ctx, NULL, pressed_target_id);
+        if (!target && seat->pressed_target_id) target = mu_context_find_id(ctx, NULL, seat->pressed_target_id);
         if (target) {
             target->flags &= ~MU_NODE_PRESSED;
             const MuNodeOps *ops = mu_get_node_ops(ctx, target->kind);
             if (ops && ops->on_pointer) ops->on_pointer(ctx, target, &pe);
         }
-        pressed_target_id = 0;
+        seat->pressed_target_id = 0;
     }
 }
 

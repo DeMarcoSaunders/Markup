@@ -25,7 +25,7 @@ typedef struct MuListState {
     } picks[MU_LIST_MAX_ITEMS];
 } MuListState;
 
-static uint32_t list_kind_id = 0;
+static const MuNodeOps list_node_ops;
 
 static MuListState *list_state(MuNode *node) {
     return node ? (MuListState *)node->state : NULL;
@@ -192,23 +192,24 @@ static const MuNodeOps list_node_ops = {
 };
 
 void mu_list_register(MuContext *ctx) {
-    (void)ctx;
-    if (!list_kind_id) list_kind_id = mu_register_node_kind(ctx, "list", &list_node_ops);
+    if (ctx && !mu_kind_list(ctx)) mu_register_node_kind(ctx, "list", &list_node_ops);
 }
 
 uint32_t mu_kind_list(const MuContext *ctx) {
-    (void)ctx;
-    return list_kind_id;
+    if (ctx) for (int i=0; i<ctx->kind_count; i++)
+        if (ctx->kind_ops[i] == &list_node_ops) return (uint32_t)i+1u;
+    return 0;
 }
 
 MuNode *mu_make_list(MuContext *ctx, float min_height) {
-    if (!ctx || !list_kind_id) return NULL;
+    uint32_t kind = mu_kind_list(ctx);
+    if (!kind) return NULL;
 
     MuListState *s = (MuListState *)calloc(1, sizeof(MuListState));
     if (!s) return NULL;
     s->sel = -1;
 
-    MuNode *list = mu_node_create(ctx, list_kind_id, s);
+    MuNode *list = mu_node_create(ctx, kind, s);
     if (!list) {
         free(s);
         return NULL;

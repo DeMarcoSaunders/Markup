@@ -453,7 +453,7 @@ extern "C" void mu_text_measure(MuRenderContext *rc, const char *text, const MuT
 extern "C" void mu_push_scissor(MuRenderContext *rc, MuRect r) {
     SkCanvas *canvas = canvas_of(rc);
     MuSkiaBackend *b = backend_of(rc);
-    if (!canvas || !b || rc->scissor_depth >= 32) return;
+    if (!canvas || !b) return;
     canvas->save();
     SkRect clip = SkRect::MakeLTRB(r.x, r.y, r.x + r.w, r.y + r.h);
     canvas->clipRect(clip, SkClipOp::kIntersect, true);

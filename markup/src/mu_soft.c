@@ -18,6 +18,7 @@
  * ------------------------------------------------------------------------ */
 
 MuSoftClip mu_soft_clip_now(const MuRenderContext *rc) {
+    if (rc->scissor_overflow) return (MuSoftClip){0,0,0,0};
     if (rc->scissor_depth > 0) return rc->clip[rc->scissor_depth - 1];
     MuSoftClip full = {0, 0, rc->width, rc->height};
     return full;

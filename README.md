@@ -255,9 +255,15 @@ CloseWindow();
 
 ## Architecture
 
+For node arenas, safe handles, parsing diagnostics, incremental layout, and pointer
+lifetimes, see [FOUNDATIONS.md](FOUNDATIONS.md). Four small, independently runnable C
+programs are in [examples/](examples/README.md); build them with the `markup_examples`
+target and render snapshots without a graphics window.
+
 | Library | Responsibility |
 |---------|----------------|
 | `markup::core` | `MuContext`, `MuNode` tree, node kind registry, arenas, modal stack hooks |
+| `markup::document` | Optional arena-backed structural parser, zero-copy slices, interned names, source diagnostics |
 | `markup::layout_flex` | `mu_layout_run` — flex layout, stretch, wrap, grow/shrink |
 | `markup::style` | `MuStyleModule` tokens, per-node overrides, `mu_style_resolve` from `MuNode.role`, word-wrap and single-line ellipsis |
 | `markup::paint` | `mu_paint_all`, `mu_paint_damaged`, damage collection and the `MuRegion` helpers, image geometry (`mu_image_fit_dst`, `mu_image_resolve_src`), image decode via stb_image (`mu_image_decode_*`) |

@@ -27,6 +27,12 @@ void mu_layout_measure_container(MuContext *ctx, MuNode *node, MuVec2 avail, MuV
 
 void mu_node_set_hit_transparent(MuNode *node, bool transparent);
 void mu_layout_mark_dirty(MuNode *node);
+/** Invalidate all measurements after a font backend or shared text theme changes. */
+void mu_layout_invalidate_all(MuContext *ctx);
+typedef enum MuOverflow { MU_OVERFLOW_VISIBLE, MU_OVERFLOW_HIDDEN } MuOverflow;
+/** Scroll is a widget with offset state (mu_make_scroll), not a clipping flag. */
+void mu_node_set_overflow(MuNode *node, MuOverflow overflow);
+void mu_node_set_visible(MuNode *node, bool visible);
 
 /** Set bounds; marks dirty when the rect changes. Returns true if bounds changed. */
 bool mu_node_set_bounds(MuNode *node, MuRect bounds);
